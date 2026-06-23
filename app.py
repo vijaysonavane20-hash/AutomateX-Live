@@ -17,7 +17,14 @@ st.set_page_config(page_title="AutomateX Pro - Finance OS", page_icon="⚡", lay
 
 st.markdown("""
     <style>
-    #MainMenu {visibility: hidden;} footer {visibility: hidden;}
+    /* 🛡️ SECURITY HACK: Hiding Streamlit Defaults & GitHub Icon */
+    #MainMenu {visibility: hidden;} 
+    footer {visibility: hidden;}
+    header {visibility: hidden !important;} 
+    [data-testid="stToolbar"] {visibility: hidden !important;}
+    [data-testid="stDecoration"] {display: none !important;}
+    
+    /* 🎨 Aapki Original Styling */
     .stApp {background-color: #F8F9FA;}
     .main-header { text-align: center; color: #1E3A8A; font-weight: 900; font-size: 40px; margin-bottom: 5px;}
     .sub-header { text-align: center; color: #64748B; font-weight: 500; font-size: 18px; margin-bottom: 30px;}
@@ -37,7 +44,6 @@ st.markdown("""
     .check-no { color: #EF4444; font-weight: bold; font-size: 20px;}
     </style>
 """, unsafe_allow_html=True)
-
 # ==========================================
 # 🔥 2. FIREBASE & AI CONFIG (ST.SECRETS)
 # ==========================================
