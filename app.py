@@ -113,7 +113,7 @@ with st.sidebar:
             st.rerun()
 
 # ==========================================
-# ⚙️ 5. PARALLEL PROCESSING CORE ENGINE
+# ⚙️ 5. PARALLEL PROCESSING CORE ENGINE (ACCURACY UPGRADED)
 # ==========================================
 def process_single_invoice(file, is_pro=False):
     """Processes a single file and returns extracted dictionary data."""
@@ -136,8 +136,9 @@ def process_single_invoice(file, is_pro=False):
                "Invoice Date" (Format: DD/MM/YYYY), "Handwritten Notes" (Scan for pen marks/scribbles, if none "-"),
                "Withholding Tax", "Total Tax", "CGST", "SGST", "IGST", "Discount", "Grand Total", "Bank Account No", "IFSC Code".
             2. "Items" list of dicts with: "Item Name", "HSN/SAC", "Qty", "Rate", "Tax %", "Base Amount", "Final Total".
-            3. DYNAMIC COLUMNS: Any extra info (PO Number, Vehicle No) goes into a dict named "Additional Info".
-            4. Return ONLY valid numbers for amounts. If missing, return "-".
+            3. STRICT COLUMNS MATH: Ensure every item in the "Items" list strictly has valid numbers for "Qty", "Rate", "Base Amount", and "Final Total". Do not leave them as text or empty.
+            4. DYNAMIC COLUMNS: Any extra info (PO Number, Vehicle No) goes into a dict named "Additional Info".
+            5. Return ONLY valid numbers for amounts. If missing, return "-".
             """
             max_retries = 5 # Ziddi Retry for Pro
         else:
@@ -188,7 +189,18 @@ def process_single_invoice(file, is_pro=False):
             else:
                 for item in items_list:
                     row = base_info.copy()
-                    row.update(item)
+                    # Secure key mapping to avoid data mismatch or empty strings during parallel execution
+                    row["Item Name"] = item.get("Item Name", "-")
+                    row["HSN/SAC"] = item.get("HSN/SAC", "-")
+                    row["Qty"] = item.get("Qty", "0") if str(item.get("Qty", "")).strip() not in ["", "-", "None"] else "0"
+                    row["Rate"] = item.get("Rate", "0") if str(item.get("Rate", "")).strip() not in ["", "-", "None"] else "0"
+                    row["Tax %"] = item.get("Tax %", "-")
+                    row["Base Amount"] = item.get("Base Amount", "0") if str(item.get("Base Amount", "")).strip() not in ["", "-", "None"] else "0"
+                    row["Final Total"] = item.get("Final Total", "-")
+                    
+                    # Any remaining dynamic item keys
+                    for k, v in item.items():
+                        if k not in row: row[k] = v
                     flat_data.append(row)
             return {"success": True, "data": flat_data}
         return {"success": False, "Doc Name": file.name}
