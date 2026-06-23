@@ -1,0 +1,7 @@
+streamlit
+pdfplumber
+pandas
+google-generativeai
+Pillow
+Pyrebase4
+urllib3<2.0
