@@ -113,7 +113,7 @@ with st.sidebar:
             st.rerun()
 
 # ==========================================
-# ⚙️ 5. PARALLEL PROCESSING CORE ENGINE (ACCURACY UPGRADED)
+# ⚙️ 5. PARALLEL PROCESSING CORE ENGINE
 # ==========================================
 def process_single_invoice(file, is_pro=False):
     """Processes a single file and returns extracted dictionary data."""
@@ -140,7 +140,7 @@ def process_single_invoice(file, is_pro=False):
             4. DYNAMIC COLUMNS: Any extra info (PO Number, Vehicle No) goes into a dict named "Additional Info".
             5. Return ONLY valid numbers for amounts. If missing, return "-".
             """
-            max_retries = 5 # Ziddi Retry for Pro
+            max_retries = 5 
         else:
             prompt = """
             Extract Basic Invoice details into STRICT JSON. 
@@ -149,7 +149,7 @@ def process_single_invoice(file, is_pro=False):
             2. "Items" list of dicts with: "Item Name", "Qty", "Rate", "Total".
             3. Return ONLY valid JSON.
             """
-            max_retries = 1 # No retry for Free
+            max_retries = 1 
 
         response = None
         for attempt in range(max_retries):
@@ -189,16 +189,18 @@ def process_single_invoice(file, is_pro=False):
             else:
                 for item in items_list:
                     row = base_info.copy()
-                    # Secure key mapping to avoid data mismatch or empty strings during parallel execution
                     row["Item Name"] = item.get("Item Name", "-")
-                    row["HSN/SAC"] = item.get("HSN/SAC", "-")
+                    row["HSN/SAC"] = item.get("HSN/SAC", "-") if is_pro else "-"
                     row["Qty"] = item.get("Qty", "0") if str(item.get("Qty", "")).strip() not in ["", "-", "None"] else "0"
                     row["Rate"] = item.get("Rate", "0") if str(item.get("Rate", "")).strip() not in ["", "-", "None"] else "0"
-                    row["Tax %"] = item.get("Tax %", "-")
-                    row["Base Amount"] = item.get("Base Amount", "0") if str(item.get("Base Amount", "")).strip() not in ["", "-", "None"] else "0"
-                    row["Final Total"] = item.get("Final Total", "-")
                     
-                    # Any remaining dynamic item keys
+                    if is_pro:
+                        row["Tax %"] = item.get("Tax %", "-")
+                        row["Base Amount"] = item.get("Base Amount", "0") if str(item.get("Base Amount", "")).strip() not in ["", "-", "None"] else "0"
+                        row["Final Total"] = item.get("Final Total", "-")
+                    else:
+                        row["Total"] = item.get("Total", "-")
+                        
                     for k, v in item.items():
                         if k not in row: row[k] = v
                     flat_data.append(row)
@@ -224,10 +226,10 @@ if not st.session_state["logged_in"]:
         </tr>
         <tr><td>Vendor & Buyer Details</td><td class="check-yes">✔</td><td class="check-yes">✔</td></tr>
         <tr><td>Line Items Extraction</td><td class="check-yes">✔</td><td class="check-yes">✔</td></tr>
+        <tr><td>Duplicate Invoice Detector</td><td class="check-yes">✔</td><td class="check-yes">✔</td></tr>
         <tr><td>Bank & IFSC Details</td><td class="check-no">✖</td><td class="check-yes">✔</td></tr>
         <tr><td>Handwritten Notes Parsing</td><td class="check-no">✖</td><td class="check-yes">✔</td></tr>
         <tr><td>Bulletproof Math Verification</td><td class="check-no">✖</td><td class="check-yes">✔</td></tr>
-        <tr><td>Duplicate Invoice Detector</td><td class="check-no">✖</td><td class="check-yes">✔</td></tr>
         <tr><td>Download Format</td><td>CSV Only</td><td>Real Excel (.xlsx) + CSV</td></tr>
         <tr><td>Speed & Servers</td><td>Standard</td><td>High-Speed Parallel Processing</td></tr>
     </table>
@@ -243,7 +245,6 @@ if not st.session_state["logged_in"]:
         st.info("⏳ Processing Documents via AI Engine...")
         all_free_data = []
         
-        # Parallel Processing
         with concurrent.futures.ThreadPoolExecutor() as executor:
             results = list(executor.map(lambda f: process_single_invoice(f, is_pro=False), free_files))
             
@@ -252,7 +253,29 @@ if not st.session_state["logged_in"]:
             else: st.warning(f"⚠️ Failed to read: {res.get('Doc Name')}")
 
         if all_free_data:
-            df_free = pd.DataFrame(all_free_data).astype(str)
+            df_free = pd.DataFrame(all_free_data)
+            
+            # 🚨 DUPLICATE DETECTION (SMART LOGIC FOR FREE VERSION)
+            if 'Vendor Name' in df_free.columns and 'Invoice Number' in df_free.columns:
+                first_docs = df_free.drop_duplicates(subset=['Vendor Name', 'Invoice Number'], keep='first')
+                first_doc_map = first_docs.set_index(['Vendor Name', 'Invoice Number'])['Doc Name'].to_dict()
+                
+                def assign_status_free(row):
+                    if str(row['Invoice Number']).strip() in ["", "-", "None"]: return "✅ Unique"
+                    return "✅ Unique" if row['Doc Name'] == first_doc_map.get((row['Vendor Name'], row['Invoice Number'])) else "🚨 Duplicate"
+                
+                df_free['Status'] = df_free.apply(assign_status_free, axis=1)
+            else:
+                df_free['Status'] = "✅ Unique"
+
+            df_free = df_free.astype(str)
+            
+            # Reorder Columns
+            cols = df_free.columns.tolist()
+            if 'Status' in cols:
+                cols.insert(0, cols.pop(cols.index('Status')))
+                df_free = df_free[cols]
+
             st.success("✅ Free Extraction Complete!")
             
             csv_free = df_free.to_csv(index=False).encode('utf-8-sig')
@@ -260,7 +283,12 @@ if not st.session_state["logged_in"]:
             with col1: st.download_button("⬇️ Download CSV Data", data=csv_free, file_name="AutomateX_Free.csv", mime="text/csv")
             with col2: st.button("🔄 Clear Table", on_click=reset_app)
             
-            st.dataframe(df_free, width="stretch")
+            def style_free(val):
+                if '🚨 Duplicate' in str(val): return 'background-color: #FECACA; color: red;'
+                elif '✅' in str(val): return 'color: green;'
+                return ''
+            
+            st.dataframe(df_free.style.map(style_free, subset=['Status'] if 'Status' in df_free.columns else []), width="stretch")
 
 # ==========================================
 # 👑 7. MODULE 2: PRO VERSION (BULLET TRAIN)
@@ -280,7 +308,6 @@ else:
         all_pro_data = []
         success_count = 0 
         
-        # ⚡ THE BULLET TRAIN MULTI-THREADING ⚡
         with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
             results = list(executor.map(lambda f: process_single_invoice(f, is_pro=True), pro_files))
             
@@ -297,7 +324,7 @@ else:
             
             df = pd.DataFrame(all_pro_data)
             
-            # 🔥 BULLETPROOF MATH VERIFICATION (Safe approach to prevent Pandas ValueError)
+            # 🔥 BULLETPROOF MATH VERIFICATION
             def clean_num(series): return pd.to_numeric(series.astype(str).str.replace(r'[^\d.-]', '', regex=True), errors='coerce').fillna(0.0)
             
             for col in ["Qty", "Rate", "Base Amount"]:
@@ -310,17 +337,16 @@ else:
             conditions = (abs(calc_val - ai_val) <= 2.0) | (ai_val == 0.0)
             df["Math Check"] = conditions.map({True: "✅ Verified", False: "🚨 Mismatch"})
             
-            # 🚨 DUPLICATE DETECTION (FIXED LOGIC)
+            # 🚨 DUPLICATE DETECTION (SMART LOGIC: First is Unique, Copies are Duplicates)
             if 'Vendor Name' in df.columns and 'Invoice Number' in df.columns:
-                # Step 1: Find unique documents first to ignore same-document line items
-                unique_invoices = df[['Doc Name', 'Vendor Name', 'Invoice Number']].drop_duplicates()
+                first_docs = df.drop_duplicates(subset=['Vendor Name', 'Invoice Number'], keep='first')
+                first_doc_map = first_docs.set_index(['Vendor Name', 'Invoice Number'])['Doc Name'].to_dict()
                 
-                # Step 2: Now check if the same Vendor & Invoice appear across MULTIPLE documents
-                dup_mask = unique_invoices.duplicated(subset=['Vendor Name', 'Invoice Number'], keep=False) & (unique_invoices['Invoice Number'] != "-")
-                duplicate_pairs = set(tuple(x) for x in unique_invoices[dup_mask][['Vendor Name', 'Invoice Number']].values)
-                
-                # Step 3: Apply Status
-                df['Status'] = df.apply(lambda x: "🚨 Duplicate" if (x['Vendor Name'], x['Invoice Number']) in duplicate_pairs else "✅ Unique", axis=1)
+                def assign_status(row):
+                    if str(row['Invoice Number']).strip() in ["", "-", "None"]: return "✅ Unique"
+                    return "✅ Unique" if row['Doc Name'] == first_doc_map.get((row['Vendor Name'], row['Invoice Number'])) else "🚨 Duplicate"
+                    
+                df['Status'] = df.apply(assign_status, axis=1)
             else:
                 df['Status'] = "✅ Unique"
                 
@@ -330,7 +356,7 @@ else:
             all_cols = df.columns.tolist()
             front_cols = ["Status", "Doc Name", "Vendor Name", "Vendor GSTIN", "Invoice Number", "Invoice Date", "Handwritten Notes", "Math Check", "Qty", "Rate", "Base Amount", "Calculated Base"]
             middle_cols = [c for c in all_cols if c not in front_cols]
-            df = df[[c for c in front_cols if c in all_cols] + middle_cols].astype(str) # Force string to prevent UI crash
+            df = df[[c for c in front_cols if c in all_cols] + middle_cols].astype(str) 
             
             # 📥 GENERATE REAL EXCEL
             excel_buffer = io.BytesIO()
@@ -353,8 +379,6 @@ else:
                 return ''
             
             try:
-                # Safe coloring logic to prevent ValueError
                 st.dataframe(df.style.map(style_dataframe, subset=['Math Check', 'Status']), width="stretch")
             except Exception as e:
-                # Fallback if Streamlit/Pandas throws error
                 st.dataframe(df, width="stretch")
