@@ -5,318 +5,337 @@ import google.generativeai as genai
 import json
 import time 
 import re
+import io
 from PIL import Image
 import pyrebase
+import concurrent.futures # For Bullet Train Speed (Parallel Processing)
 
-# 🚀 1. PAGE SETUP
-st.set_page_config(page_title="AutomateX - Smart Extractor", page_icon="⚡", layout="wide") 
+# ==========================================
+# 🚀 1. PAGE SETUP & CSS
+# ==========================================
+st.set_page_config(page_title="AutomateX Pro - Finance OS", page_icon="⚡", layout="wide") 
 
-# 🎨 2. CUSTOM CSS (Aapki original styling)
 st.markdown("""
     <style>
     #MainMenu {visibility: hidden;} footer {visibility: hidden;}
     .stApp {background-color: #F8F9FA;}
+    .main-header { text-align: center; color: #1E3A8A; font-weight: 900; font-size: 40px; margin-bottom: 5px;}
+    .sub-header { text-align: center; color: #64748B; font-weight: 500; font-size: 18px; margin-bottom: 30px;}
     .stButton>button { border-radius: 8px; font-weight: bold; transition: 0.3s; }
-    .main-header { text-align: center; color: #1E3A8A; font-weight: 900; }
-    .pricing-table th { background-color: #1E3A8A; color: white; text-align: center; font-size: 18px; padding: 12px;}
-    .pricing-table td { text-align: center; font-size: 16px; padding: 10px; background-color: white;}
-    .metric-box { background: white; padding: 15px; border-radius: 8px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); text-align: center;}
+    
+    /* Beautiful Dashboard Metrics */
+    .metric-box { background: white; padding: 15px; border-radius: 8px; box-shadow: 0 4px 6px rgba(0,0,0,0.05); text-align: center; border-bottom: 4px solid #3B82F6;}
     .metric-title { font-size: 14px; color: #4B5563; font-weight: bold; margin-bottom: 5px; }
-    .metric-value { font-size: 24px; font-weight: 900; margin: 0; }
+    .metric-value { font-size: 24px; font-weight: 900; margin: 0; color: #0F172A;}
+    
+    /* Pricing Table Style */
+    .pricing-table { width: 100%; border-collapse: collapse; margin-bottom: 30px; box-shadow: 0 4px 6px rgba(0,0,0,0.05); border-radius: 8px; overflow: hidden; }
+    .pricing-table th { background-color: #1E3A8A; color: white; padding: 12px; font-size: 18px; text-align: center; }
+    .pricing-table td { background-color: white; padding: 12px; font-size: 16px; border-bottom: 1px solid #E2E8F0; text-align: center; }
+    .pricing-table tr:hover { background-color: #F1F5F9; }
+    .check-yes { color: #10B981; font-weight: bold; font-size: 20px;}
+    .check-no { color: #EF4444; font-weight: bold; font-size: 20px;}
     </style>
 """, unsafe_allow_html=True)
 
-# 🔥 FIREBASE CONFIGURATION (Secured with st.secrets)
-firebase_config = {
-    "apiKey": st.secrets["FIREBASE_API_KEY"],
-    "authDomain": "automate-office-work.firebaseapp.com",
-    "projectId": "automate-office-work",
-    "storageBucket": "automate-office-work.firebasestorage.app",
-    "messagingSenderId": "813309616906",
-    "appId": "1:813309616906:web:db3615fd788469372bd0f3",
-    "databaseURL": "" 
-}
-firebase = pyrebase.initialize_app(firebase_config)
-auth = firebase.auth()
+# ==========================================
+# 🔥 2. FIREBASE & AI CONFIG (ST.SECRETS)
+# ==========================================
+try:
+    firebase_config = {
+        "apiKey": st.secrets["FIREBASE_API_KEY"],
+        "authDomain": "automate-office-work.firebaseapp.com",
+        "projectId": "automate-office-work",
+        "storageBucket": "automate-office-work.firebasestorage.app",
+        "messagingSenderId": "813309616906",
+        "appId": "1:813309616906:web:db3615fd788469372bd0f3",
+        "databaseURL": "" 
+    }
+    firebase = pyrebase.initialize_app(firebase_config)
+    auth = firebase.auth()
 
-# Session States
+    GOOGLE_API_KEY = st.secrets["GOOGLE_API_KEY"]
+    genai.configure(api_key=GOOGLE_API_KEY)
+    model = genai.GenerativeModel("gemini-2.5-flash") 
+except Exception as e:
+    st.error("⚠️ System Configuration Error. Please check GitHub Secrets.")
+    st.stop()
+
+# ==========================================
+# 🧠 3. SESSION STATES & RESET
+# ==========================================
 if "logged_in" not in st.session_state: st.session_state["logged_in"] = False
 if "user_email" not in st.session_state: st.session_state["user_email"] = ""
 if "uploader_key" not in st.session_state: st.session_state["uploader_key"] = 0 
-if "credits" not in st.session_state: st.session_state["credits"] = 10 # Startup Bonus Credits
+if "credits" not in st.session_state: st.session_state["credits"] = 10 
 
 def reset_app(): st.session_state["uploader_key"] += 1
 
-# 🤖 PRO AI CONFIG (Secured with st.secrets)
-GOOGLE_API_KEY = st.secrets["GOOGLE_API_KEY"]
-genai.configure(api_key=GOOGLE_API_KEY)
-model = genai.GenerativeModel("gemini-2.5-flash") 
-
-# =================================================================
-# 🛡️ SIDEBAR (LOGIN & WALLET SYSTEM)
-# =================================================================
+# ==========================================
+# 🛡️ 4. SIDEBAR LOGIC (LOGIN & WALLET)
+# ==========================================
 with st.sidebar:
+    st.image("https://cdn-icons-png.flaticon.com/512/2936/2936666.png", width=80)
+    st.markdown("## AutomateX OS")
+    st.markdown("---")
+    
     if not st.session_state["logged_in"]:
-        st.markdown("### 🔐 User Login")
-        st.info("Sign in to access Advanced Extraction & Your Wallet.")
-        choice = st.radio("Action", ["Sign In", "Create Account"], horizontal=True)
-        email = st.text_input("Email", placeholder="name@company.com")
+        st.markdown("### 🔐 Secure Login")
+        auth_mode = st.radio("Choose Action", ["Sign In", "Create Account"], horizontal=True)
+        email = st.text_input("Email ID", placeholder="admin@automatex.com")
         password = st.text_input("Password", type="password")
-        if st.button("🚀 Sign In", key="login_btn"):
-            try:
-                if choice == "Sign In":
+        
+        if st.button("🚀 Proceed", use_container_width=True):
+            if auth_mode == "Sign In":
+                try:
                     user = auth.sign_in_with_email_and_password(email, password)
                     st.session_state["logged_in"], st.session_state["user_email"] = True, email
                     st.rerun()
-                else:
+                except: st.error("❌ Invalid Email or Password.")
+            else:
+                try:
                     user = auth.create_user_with_email_and_password(email, password)
-                    st.success("Account Created! You can now sign in.")
-            except: st.error("❌ Invalid Credentials.")
+                    st.success("✅ Account Created! You can now Sign In.")
+                except: st.error("❌ Account creation failed. Password must be 6+ chars.")
     else:
-        st.markdown(f"### 👤 Profile<br><span style='color:#FF0080; font-size:14px;'>{st.session_state['user_email']}</span>", unsafe_allow_html=True)
-        
-        # 💰 WALLET UI
+        st.success(f"👤 Logged in as:\n**{st.session_state['user_email']}**")
         st.markdown(f"""
-        <div class='metric-box' style='padding: 10px; margin-top: 10px; border: 2px solid #10B981;'>
-            <b style='color:#4B5563;'>💰 Wallet Balance</b><br>
-            <span style='font-size: 22px; color:#10B981; font-weight:900;'>{st.session_state['credits']} Credits</span>
+        <div class='metric-box' style='border-bottom: 4px solid #10B981;'>
+            <div class='metric-title'>Pro Wallet Balance</div>
+            <p class='metric-value' style='color:#10B981;'>⚡ {st.session_state['credits']} Credits</p>
         </div>
         """, unsafe_allow_html=True)
-        
-        if st.button("➕ Add Funds (UPI / Cards)"):
-            st.info("Payment Gateway (Stripe/Razorpay) integration pending. Recharge will be live soon!")
-
+        st.write("")
+        if st.button("➕ Add Funds (Coming Soon)"): st.info("Payment Gateway integration pending.")
         st.write("---")
-        if st.button("Logout 🚪"):
+        if st.button("🚪 Logout", use_container_width=True):
             st.session_state["logged_in"], st.session_state["user_email"] = False, ""
             st.rerun()
 
-# =================================================================
-# 🟢 MODULE 1: THE SMART FREE VERSION
-# =================================================================
+# ==========================================
+# ⚙️ 5. PARALLEL PROCESSING CORE ENGINE
+# ==========================================
+def process_single_invoice(file, is_pro=False):
+    """Processes a single file and returns extracted dictionary data."""
+    try:
+        if file.name.lower().endswith(('.jpg', '.jpeg', '.png', '.webp', '.tiff')):
+            image = Image.open(file)
+            image.thumbnail((1024, 1024))
+            ai_input = image
+        else:
+            text = ""
+            with pdfplumber.open(file) as pdf:
+                for page in pdf.pages[:2]: text += page.extract_text() + "\n"
+            ai_input = text
+
+        if is_pro:
+            prompt = """
+            Extract Invoice details into STRICT JSON. 
+            RULES:
+            1. Root keys MUST be: "Vendor Name", "Vendor GSTIN", "Buyer Name", "Buyer GSTIN", "Invoice Number", 
+               "Invoice Date" (Format: DD/MM/YYYY), "Handwritten Notes" (Scan for pen marks/scribbles, if none "-"),
+               "Withholding Tax", "Total Tax", "CGST", "SGST", "IGST", "Discount", "Grand Total", "Bank Account No", "IFSC Code".
+            2. "Items" list of dicts with: "Item Name", "HSN/SAC", "Qty", "Rate", "Tax %", "Base Amount", "Final Total".
+            3. DYNAMIC COLUMNS: Any extra info (PO Number, Vehicle No) goes into a dict named "Additional Info".
+            4. Return ONLY valid numbers for amounts. If missing, return "-".
+            """
+            max_retries = 5 # Ziddi Retry for Pro
+        else:
+            prompt = """
+            Extract Basic Invoice details into STRICT JSON. 
+            RULES:
+            1. Root keys MUST be: "Vendor Name", "Vendor GSTIN", "Buyer Name", "Invoice Number", "Invoice Date", "Total Tax", "Grand Total".
+            2. "Items" list of dicts with: "Item Name", "Qty", "Rate", "Total".
+            3. Return ONLY valid JSON.
+            """
+            max_retries = 1 # No retry for Free
+
+        response = None
+        for attempt in range(max_retries):
+            try:
+                response = model.generate_content([prompt, ai_input])
+                break
+            except Exception as e:
+                if attempt < max_retries - 1: time.sleep(5)
+                else: return {"Error": f"API Failed for {file.name}", "Doc Name": file.name}
+        
+        if response:
+            match = re.search(r'\{.*\}', response.text, re.DOTALL)
+            if match: data = json.loads(match.group(0))
+            else: data = {}
+            
+            base_info = {"Doc Name": file.name}
+            
+            # Extract based on version
+            if is_pro:
+                keys_to_extract = ["Vendor Name", "Vendor GSTIN", "Buyer Name", "Buyer GSTIN", "Invoice Number", "Invoice Date", "Handwritten Notes", "Withholding Tax", "Total Tax", "CGST", "SGST", "IGST", "Discount", "Grand Total", "Bank Account No", "IFSC Code"]
+            else:
+                keys_to_extract = ["Vendor Name", "Vendor GSTIN", "Buyer Name", "Invoice Number", "Invoice Date", "Total Tax", "Grand Total"]
+
+            for k in keys_to_extract: base_info[k] = data.get(k, "-")
+            
+            # Dynamic Info (Pro Only)
+            if is_pro:
+                additional_info = data.get("Additional Info", {})
+                if isinstance(additional_info, dict):
+                    for k, v in additional_info.items(): base_info[k] = v
+            
+            items_list = data.get("Items", [])
+            flat_data = []
+            if len(items_list) == 0:
+                base_info["Item Info"] = "No line items found"
+                flat_data.append(base_info)
+            else:
+                for item in items_list:
+                    row = base_info.copy()
+                    row.update(item)
+                    flat_data.append(row)
+            return {"success": True, "data": flat_data}
+        return {"success": False, "Doc Name": file.name}
+    except Exception as e:
+        return {"success": False, "Doc Name": file.name}
+
+# ==========================================
+# 🟢 6. MODULE 1: FREE VERSION (60% UPGRADED)
+# ==========================================
 if not st.session_state["logged_in"]:
-    st.markdown("<h1 class='main-header'>AutomateX Finance Analyzer (Free)</h1>", unsafe_allow_html=True)
-    free_files = st.file_uploader("Upload PDF Invoices", type=["pdf"], accept_multiple_files=True, key=f"uploader_free_{st.session_state['uploader_key']}")
+    st.markdown("<h1 class='main-header'>AutomateX Lite 🟢</h1>", unsafe_allow_html=True)
+    st.markdown("<p class='sub-header'>Free Smart Extractor (60% Pro Features unlocked!)</p>", unsafe_allow_html=True)
+    
+    # BEAUTIFUL COMPARISON TABLE
+    st.markdown("""
+    <table class="pricing-table">
+        <tr>
+            <th>Features Included</th>
+            <th>🟢 Free Version</th>
+            <th>👑 Pro Version</th>
+        </tr>
+        <tr><td>Vendor & Buyer Details</td><td class="check-yes">✔</td><td class="check-yes">✔</td></tr>
+        <tr><td>Line Items Extraction</td><td class="check-yes">✔</td><td class="check-yes">✔</td></tr>
+        <tr><td>Bank & IFSC Details</td><td class="check-no">✖</td><td class="check-yes">✔</td></tr>
+        <tr><td>Handwritten Notes Parsing</td><td class="check-no">✖</td><td class="check-yes">✔</td></tr>
+        <tr><td>Bulletproof Math Verification</td><td class="check-no">✖</td><td class="check-yes">✔</td></tr>
+        <tr><td>Duplicate Invoice Detector</td><td class="check-no">✖</td><td class="check-yes">✔</td></tr>
+        <tr><td>Download Format</td><td>CSV Only</td><td>Real Excel (.xlsx) + CSV</td></tr>
+        <tr><td>Speed & Servers</td><td>Standard</td><td>High-Speed Parallel Processing</td></tr>
+    </table>
+    """, unsafe_allow_html=True)
+
+    free_files = st.file_uploader("Upload PDF Invoices (Max 3 files per batch)", type=["pdf"], accept_multiple_files=True, key=f"uploader_free_{st.session_state['uploader_key']}")
     
     if free_files:
-        st.info("⏳ Scanning Documents & Generating Insights...")
-        free_data = []
-        for file in free_files:
-            try:
-                text = ""
-                lines = []
-                with pdfplumber.open(file) as pdf:
-                    for page in pdf.pages[:2]: 
-                        extracted = page.extract_text(layout=True)
-                        if extracted: 
-                            text += extracted + "\n"
-                            lines.extend([line.strip() for line in extracted.split('\n') if line.strip() and len(line.strip()) > 3])
-                
-                vendor_name = lines[0] if lines else "-"
-                if "INVOICE" in vendor_name.upper() or "TAX" in vendor_name.upper():
-                    vendor_name = lines[1] if len(lines) > 1 else vendor_name
-
-                date_match = re.search(r'(?i)(?:date|dated)[\s]*[:\-]?[\s]*([0-9]{1,2}(?:st|nd|rd|th)?[-/.\s]?[A-Za-z0-9]{2,9}[-/.\s]?[0-9]{2,4})', text)
-                inv_no_match = re.search(r'(?i)(?:invoice\s*no|inv\s*no|bill\s*no|invoice\s*#|invoice\s*number)[\s]*[:\-]?[\s]*([A-Z0-9\-\/]+)', text)
-                gstins = list(set(re.findall(r'\d{2}[A-Z]{5}\d{4}[A-Z]{1}[A-Z0-9]{3}', text.upper())))
-
-                amounts = re.findall(r'[\d,]+\.\d{2}', text)
-                clean_amounts = [float(a.replace(',', '')) for a in amounts] if amounts else []
-                grand_total = max(clean_amounts) if clean_amounts else 0.0
-
-                compliance = "✅ OK"
-                if grand_total > 50000 and not gstins: compliance = "⚠️ Missing GSTIN (>50K)"
-
-                free_data.append({
-                    "Doc Name": file.name, "Vendor Name": vendor_name,
-                    "Invoice No": inv_no_match.group(1).strip() if inv_no_match else "-",
-                    "Invoice Date": date_match.group(1).strip() if date_match else "-",
-                    "GSTIN": gstins[0] if gstins else "-", "Compliance Status": compliance,
-                    "Grand Total": grand_total, "Line Items": "🔒 Requires Pro"
-                })
-            except: free_data.append({"Doc Name": file.name, "Status": "Failed to read."})
-                
-        if free_data:
-            df_free = pd.DataFrame(free_data)
-            duplicates = df_free.duplicated(subset=['Vendor Name', 'Invoice No'], keep=False)
-            df_free.loc[duplicates & (df_free['Invoice No'] != '-'), 'Compliance Status'] = "🚨 DUPLICATE DETECTED"
-
-            total_spend = df_free[pd.to_numeric(df_free['Grand Total'], errors='coerce').notnull()]['Grand Total'].sum()
-            num_duplicates = len(df_free[df_free['Compliance Status'] == '🚨 DUPLICATE DETECTED'])
-            num_alerts = len(df_free[df_free['Compliance Status'].str.contains('⚠️', na=False)])
-
-            st.markdown("### 📊 Batch Analytics Summary")
-            col_m1, col_m2, col_m3, col_m4 = st.columns(4)
-            with col_m1: st.markdown(f"<div class='metric-box'><div class='metric-title'>Total Invoices</div><p class='metric-value' style='color:#1E3A8A;'>{len(df_free)}</p></div>", unsafe_allow_html=True)
-            with col_m2: st.markdown(f"<div class='metric-box'><div class='metric-title'>Total Spend</div><p class='metric-value' style='color:#10B981;'>₹{total_spend:,.2f}</p></div>", unsafe_allow_html=True)
-            with col_m3: st.markdown(f"<div class='metric-box'><div class='metric-title'>🚨 Duplicates</div><p class='metric-value' style='color:{'#EF4444' if num_duplicates > 0 else '#10B981'};'>{num_duplicates}</p></div>", unsafe_allow_html=True)
-            with col_m4: st.markdown(f"<div class='metric-box'><div class='metric-title'>⚠️ Compliance Alerts</div><p class='metric-value' style='color:{'#F59E0B' if num_alerts > 0 else '#10B981'};'>{num_alerts}</p></div>", unsafe_allow_html=True)
+        if len(free_files) > 3:
+            st.error("⚠️ Free version allows max 3 files at a time. Please login for unlimited uploads.")
+            st.stop()
             
-            st.success("✅ Extraction Complete!")
+        st.info("⏳ Processing Documents via AI Engine...")
+        all_free_data = []
+        
+        # Parallel Processing
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            results = list(executor.map(lambda f: process_single_invoice(f, is_pro=False), free_files))
+            
+        for res in results:
+            if res.get("success"): all_free_data.extend(res["data"])
+            else: st.warning(f"⚠️ Failed to read: {res.get('Doc Name')}")
+
+        if all_free_data:
+            df_free = pd.DataFrame(all_free_data).astype(str)
+            st.success("✅ Free Extraction Complete!")
+            
             csv_free = df_free.to_csv(index=False).encode('utf-8-sig')
+            col1, col2 = st.columns([1, 1])
+            with col1: st.download_button("⬇️ Download CSV Data", data=csv_free, file_name="AutomateX_Free.csv", mime="text/csv")
+            with col2: st.button("🔄 Clear Table", on_click=reset_app)
             
-            # 🔥 TOP BUTTONS
-            t1, t2 = st.columns([1, 1])
-            with t1: st.download_button("⬇️ Download Excel (Top)", data=csv_free, file_name="AutomateX_Accounts.csv", mime="text/csv", key="down_free_top")
-            with t2: st.button("🔄 Clear & Restart (Top)", on_click=reset_app, key="reset_free_top")
+            st.dataframe(df_free, width="stretch")
 
-            def color_alerts(val): return 'color: red; font-weight: bold' if '🚨' in str(val) else 'color: orange; font-weight: bold' if '⚠️' in str(val) else 'color: green'
-            st.dataframe(df_free.style.map(color_alerts, subset=['Compliance Status']), width="stretch")
-            
-            # 🔥 BOTTOM BUTTONS
-            b1, b2 = st.columns([1, 1])
-            with b1: st.download_button("⬇️ Download Excel (Bottom)", data=csv_free, file_name="AutomateX_Accounts.csv", mime="text/csv", key="down_free_bot")
-            with b2: st.button("🔄 Clear & Restart (Bottom)", on_click=reset_app, key="reset_free_bot")
-
-# =================================================================
-# 👑 MODULE 2: THE PAID PRO VERSION (UPGRADED WITH HANDWRITTEN NOTES)
-# =================================================================
+# ==========================================
+# 👑 7. MODULE 2: PRO VERSION (BULLET TRAIN)
+# ==========================================
 else:
     st.markdown("<h1 class='main-header'>AutomateX Pro Dashboard 👑</h1>", unsafe_allow_html=True)
+    st.markdown("<p class='sub-header'>Enterprise-Grade Parallel Processing AI Engine</p>", unsafe_allow_html=True)
     
-    # 📁 Supported ALL major formats
-    pro_files = st.file_uploader("Upload Invoices (PDF/Images - All Formats)", type=["pdf", "jpg", "jpeg", "png", "webp", "tiff"], accept_multiple_files=True, key=f"uploader_pro_{st.session_state['uploader_key']}")
+    pro_files = st.file_uploader("📤 Upload Invoices (All Formats: PDF, JPG, PNG, WEBP, TIFF)", type=["pdf", "jpg", "jpeg", "png", "webp", "tiff"], accept_multiple_files=True, key=f"uploader_pro_{st.session_state['uploader_key']}")
     
     if pro_files:
         if st.session_state["credits"] < len(pro_files):
             st.error(f"⚠️ You only have {st.session_state['credits']} credits left. Please recharge your wallet.")
             st.stop()
             
-        st.info(f"⏳ Processing {len(pro_files)} document(s). API Retry Mode: ON (Will wait if server is busy)...")
-        all_data = []
+        st.info(f"⚡ Parallel Processing {len(pro_files)} document(s)... API Retry Mode ON.")
+        all_pro_data = []
         success_count = 0 
         
-        for file in pro_files:
-            extracted_data = {}
-            # 🖼️ File Processing
-            if file.name.lower().endswith(('.jpg', '.jpeg', '.png', '.webp', '.tiff')):
-                image = Image.open(file)
-                image.thumbnail((1024, 1024))
-                ai_input = image
+        # ⚡ THE BULLET TRAIN MULTI-THREADING ⚡
+        with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+            results = list(executor.map(lambda f: process_single_invoice(f, is_pro=True), pro_files))
+            
+        for res in results:
+            if res.get("success"):
+                all_pro_data.extend(res["data"])
+                success_count += 1
             else:
-                text = ""
-                with pdfplumber.open(file) as pdf:
-                    for page in pdf.pages[:2]: text += page.extract_text() + "\n"
-                ai_input = text
-
-            # 🔥 THE ZIDDI PROMPT (With Handwritten Notes & ALL old features)
-            prompt = """
-            Extract Invoice details into STRICT JSON. 
-            RULES:
-            1. Root level MUST have: "Vendor Name", "Vendor GSTIN", "Buyer Name", "Buyer GSTIN", "Invoice Number", 
-               "Invoice Date" (MUST be converted exactly to DD/MM/YYYY format, e.g., 20/06/2026 regardless of original format), 
-               "Handwritten Notes" (Scan the document carefully for ANY pen marks, scribbles, manual corrections, or notes. Read, understand, and extract them here. If none, return "-"),
-               "Withholding Tax", "Total Tax Amount", "CGST", "SGST", "IGST", "Discount", "Grand Total", "Bank Account No", "IFSC Code".
-            2. Extract "Items" as a list of dictionaries with math keys ("Item Name", "Qty", "Rate", "Base Amount", "Final Total").
-            3. DYNAMIC COLUMNS: If you find ANY other valuable extra details in the invoice (e.g., PO Number, Vehicle No), put them inside a dictionary key called "Additional Info".
-            4. CLEAN NUMBERS: Return ONLY numbers and decimals for amounts.
-            If a value is not found, return "-".
-            """
-            
-            # ⏳ API BUSY RETRY LOGIC (Never Skip)
-            max_retries = 5
-            response = None
-            for attempt in range(max_retries):
-                try:
-                    response = model.generate_content([prompt, ai_input])
-                    break 
-                except Exception as e:
-                    if attempt < max_retries - 1:
-                        st.toast(f"⏳ API Busy! Waiting & Retrying '{file.name}' (Attempt {attempt+2}/{max_retries})...")
-                        time.sleep(8) 
-                    else:
-                        st.error(f"❌ API Failed for '{file.name}' after {max_retries} attempts.")
-                        response = None
-            
-            if response:
-                match = re.search(r'\{.*\}', response.text, re.DOTALL)
-                if match: extracted_data = json.loads(match.group(0))
-                else: extracted_data = {}
+                st.error(f"❌ Failed to parse {res.get('Doc Name')}")
                 
-                # Flattening Base Data & Tax Bundle
-                base_info = {
-                    "Doc Name": file.name, 
-                    "Vendor Name": extracted_data.get("Vendor Name", "-"),
-                    "Vendor GSTIN": extracted_data.get("Vendor GSTIN", "-"),
-                    "Buyer Name": extracted_data.get("Buyer Name", "-"),
-                    "Buyer GSTIN": extracted_data.get("Buyer GSTIN", "-"),
-                    "Invoice Number": extracted_data.get("Invoice Number", "-"), 
-                    "Invoice Date": extracted_data.get("Invoice Date", "-"),
-                    "Handwritten Notes": extracted_data.get("Handwritten Notes", "-"), # ✍️ New Feature Added Here!
-                    "CGST": extracted_data.get("CGST", "-"),
-                    "SGST": extracted_data.get("SGST", "-"),
-                    "IGST": extracted_data.get("IGST", "-"),
-                    "Withholding Tax": extracted_data.get("Withholding Tax", "-"),
-                    "Total Tax": extracted_data.get("Total Tax Amount", "-"),
-                    "Discount": extracted_data.get("Discount", "-"),
-                    "Grand Total": extracted_data.get("Grand Total", "-"),
-                    "Bank Account No": extracted_data.get("Bank Account No", "-"), 
-                    "IFSC Code": extracted_data.get("IFSC Code", "-")
-                }
-
-                # 🧠 Dynamic Extra Columns Injection
-                additional_info = extracted_data.get("Additional Info", {})
-                if isinstance(additional_info, dict):
-                    for k, v in additional_info.items():
-                        base_info[k] = v
-                
-                items_list = extracted_data.get("Items", [])
-                if len(items_list) == 0:
-                    base_info["Item Info"] = "No line items found"
-                    all_data.append(base_info)
-                else:
-                    for item in items_list:
-                        row_data = base_info.copy()
-                        row_data.update(item)
-                        all_data.append(row_data)
-                        
-                success_count += 1 
+        if all_pro_data:
+            st.session_state["credits"] -= success_count
+            st.success(f"✅ Fast Processing Complete! {success_count} credits deducted.")
             
-        if all_data:
-            if success_count > 0:
-                st.session_state["credits"] -= success_count
-                st.success(f"✅ {success_count} invoices processed successfully!")
-                
-            df = pd.DataFrame(all_data).astype(object)
+            df = pd.DataFrame(all_pro_data)
             
-            # 🚨 DUPLICATE DETECTION IN PRO
-            duplicates = df.duplicated(subset=['Vendor Name', 'Invoice Number'], keep=False)
-            df['Duplicate Status'] = duplicates.map({True: "🚨 Duplicate", False: "✅ Unique"})
-            
-            # 🔥 BULLETPROOF MATH VERIFICATION
-            def clean_num(series): return pd.to_numeric(series.astype(str).str.replace(r'[^\d.]', '', regex=True), errors='coerce').fillna(0.0)
+            # 🔥 BULLETPROOF MATH VERIFICATION (Safe approach to prevent Pandas ValueError)
+            def clean_num(series): return pd.to_numeric(series.astype(str).str.replace(r'[^\d.-]', '', regex=True), errors='coerce').fillna(0.0)
             
             for col in ["Qty", "Rate", "Base Amount"]:
                 if col not in df.columns: df[col] = 0.0
 
-            df["Calculated Base Amount"] = clean_num(df["Qty"]) * clean_num(df["Rate"])
-            calc_val = df["Calculated Base Amount"].round(2)
+            df["Calculated Base"] = clean_num(df["Qty"]) * clean_num(df["Rate"])
+            calc_val = df["Calculated Base"].round(2)
             ai_val = clean_num(df["Base Amount"]).round(2)
             
             conditions = (abs(calc_val - ai_val) <= 2.0) | (ai_val == 0.0)
-            df["Math Verification"] = conditions.map({True: "✅ Verified", False: "🚨 Mismatch"})
+            df["Math Check"] = conditions.map({True: "✅ Verified", False: "🚨 Mismatch"})
+            
+            # 🚨 DUPLICATE DETECTION 
+            if 'Vendor Name' in df.columns and 'Invoice Number' in df.columns:
+                duplicates = df.duplicated(subset=['Vendor Name', 'Invoice Number'], keep=False)
+                df['Status'] = duplicates.map({True: "🚨 Duplicate", False: "✅ Unique"})
+            else:
+                df['Status'] = "✅ Unique"
+                
             df.fillna("-", inplace=True)
             
-            # Ordering Columns properly (Putting Handwritten Notes upfront too)
+            # Column Ordering
             all_cols = df.columns.tolist()
-            front_cols = ["Duplicate Status", "Doc Name", "Vendor Name", "Vendor GSTIN", "Invoice Number", "Invoice Date", "Handwritten Notes", "Math Verification", "Qty", "Rate", "Base Amount", "Calculated Base Amount"]
+            front_cols = ["Status", "Doc Name", "Vendor Name", "Vendor GSTIN", "Invoice Number", "Invoice Date", "Handwritten Notes", "Math Check", "Qty", "Rate", "Base Amount", "Calculated Base"]
             middle_cols = [c for c in all_cols if c not in front_cols]
-            df = df[[c for c in front_cols if c in all_cols] + middle_cols]
+            df = df[[c for c in front_cols if c in all_cols] + middle_cols].astype(str) # Force string to prevent UI crash
             
-            # 📥 DOWNLOAD OPTIONS (CSV & Real Excel)
-            csv_data = df.to_csv(index=False).encode('utf-8-sig') 
-            
-            import io
+            # 📥 GENERATE REAL EXCEL
             excel_buffer = io.BytesIO()
             with pd.ExcelWriter(excel_buffer, engine='openpyxl') as writer:
-                df.to_excel(writer, index=False, sheet_name="Invoices")
+                df.to_excel(writer, index=False, sheet_name="AutomateX Data")
             excel_data = excel_buffer.getvalue()
+            csv_data = df.to_csv(index=False).encode('utf-8-sig') 
             
-            st.markdown("### 📥 Download Results")
+            # UI BUTTONS & TABLE
+            st.markdown("### 📥 Download Results & Analytics")
             d1, d2, d3 = st.columns([1, 1, 2])
-            with d1: st.download_button("⬇️ Download CSV", data=csv_data, file_name="AutomateX_Pro.csv", mime="text/csv", use_container_width=True)
-            with d2: st.download_button("⬇️ Download Excel (.xlsx)", data=excel_data, file_name="AutomateX_Pro.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
-            with d3: st.button("🔄 Clear Dashboard", on_click=reset_app)
+            with d1: st.download_button("⬇️ Download Excel (.xlsx)", data=excel_data, file_name="AutomateX_Pro.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
+            with d2: st.download_button("⬇️ Download CSV", data=csv_data, file_name="AutomateX_Pro.csv", mime="text/csv", use_container_width=True)
+            with d3: st.button("🔄 Clear Dashboard", on_click=reset_app, use_container_width=True)
             
-            def highlight_errors(val): return 'background-color: #FECACA; color: red;' if '🚨 Mismatch' in str(val) or '🚨 Duplicate' in str(val) else 'color: green;' if '✅' in str(val) else ''
-            st.dataframe(df.style.map(highlight_errors, subset=['Math Verification', 'Duplicate Status']), width="stretch")
+            # Error-Free Styling Function
+            def style_dataframe(val):
+                if '🚨 Mismatch' in str(val) or '🚨 Duplicate' in str(val): return 'background-color: #FECACA; color: red;'
+                elif '✅' in str(val): return 'color: green;'
+                return ''
+            
+            try:
+                # Safe coloring logic to prevent ValueError
+                st.dataframe(df.style.map(style_dataframe, subset=['Math Check', 'Status']), width="stretch")
+            except Exception as e:
+                # Fallback if Streamlit/Pandas throws error
+                st.dataframe(df, width="stretch")
