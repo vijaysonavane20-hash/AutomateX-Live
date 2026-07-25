@@ -1,0 +1,6 @@
+streamlit
+pdfplumber
+python-docx
+google-generativeai
+Pillow
+urllib3<2.0
