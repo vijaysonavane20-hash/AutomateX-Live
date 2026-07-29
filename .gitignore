@@ -1,0 +1,19 @@
+# Local paths — internal network / usernames, never publish (repo is public)
+sample_paths.txt
+
+# Store master (contains store emails)
+STORE_MASTER_NEW*.xlsx
+master/
+
+# Generated reports
+SAMPLE_INDEX_*.xlsx
+FlowAI_Report_*.xlsx
+
+# Streamlit secrets
+.streamlit/secrets.toml
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
