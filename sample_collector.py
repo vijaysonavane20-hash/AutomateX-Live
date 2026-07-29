@@ -155,6 +155,16 @@ def lp(path):
     return "\\\\?\\" + p
 
 
+def unlp(path):
+    r"""Report ke liye \\?\ prefix hatao — warna Excel mein ganda dikhta hai."""
+    p = str(path)
+    if p.startswith("\\\\?\\UNC\\"):
+        return "\\\\" + p[8:]
+    if p.startswith("\\\\?\\"):
+        return p[4:]
+    return p
+
+
 def safe_name(s):
     return re.sub(r'[<>:"/\\|?*]', "", str(s)).strip()
 
@@ -282,38 +292,52 @@ def pick_samples(files, n):
     if len(files) <= n:
         return list(files)
 
-    by_kind = defaultdict(list)
-    for f in files:
-        by_kind[f["kind"]].append(f)
-    for lst in by_kind.values():
-        random.shuffle(lst)
-
-    kinds = sorted(by_kind, key=lambda k: (KIND_RANK.get(k, 5), -len(by_kind[k])))
+    # JUNK (signature/logo images) ko variety round se BAAHAR rakho —
+    # ek aur asli PDF hamesha ek signature image se behtar hai.
+    good = [f for f in files if f["kind"] != "JUNK"]
+    junk = [f for f in files if f["kind"] == "JUNK"]
 
     picked, taken, used_dates = [], set(), set()
 
-    # Pass 1: har kind se ek, naya date folder prefer karo
-    # Pass 2: date repeat chalega
-    for strict_date in (True, False):
-        for k in kinds:
+    def take(pool, respect_date):
+        for f in pool:
+            if id(f) in taken:
+                continue
+            if respect_date and f["datefolder"] and f["datefolder"] in used_dates:
+                continue
+            picked.append(f); taken.add(id(f))
+            if f["datefolder"]:
+                used_dates.add(f["datefolder"])
+            return True
+        return False
+
+    by_kind = defaultdict(list)
+    for f in good:
+        by_kind[f["kind"]].append(f)
+    for lst in by_kind.values():
+        random.shuffle(lst)
+    kinds = sorted(by_kind, key=lambda k: (KIND_RANK.get(k, 5), -len(by_kind[k])))
+
+    # Round-robin: har kind se baari-baari.
+    # Pehle naye date folder, phir date repeat allowed.
+    for respect_date in (True, False):
+        progress = True
+        while len(picked) < n and progress:
+            progress = False
+            for k in kinds:
+                if len(picked) >= n:
+                    break
+                if take(by_kind[k], respect_date):
+                    progress = True
+
+    # Sabse aakhir mein junk — sirf jab aur kuch bacha hi nahi
+    if len(picked) < n:
+        random.shuffle(junk)
+        for f in junk:
             if len(picked) >= n:
                 break
-            for f in by_kind[k]:
-                if id(f) in taken:
-                    continue
-                if strict_date and f["datefolder"] and f["datefolder"] in used_dates:
-                    continue
-                picked.append(f); taken.add(id(f)); used_dates.add(f["datefolder"])
-                break
-        if len(picked) >= n:
-            break
-
-    # Pass 3: abhi bhi kam hain to jo mile bhar do (JUNK last)
-    if len(picked) < n:
-        rest = [f for f in files if id(f) not in taken]
-        rest.sort(key=lambda f: (KIND_RANK.get(f["kind"], 5), random.random()))
-        for f in rest[:n - len(picked)]:
-            picked.append(f); taken.add(id(f))
+            if id(f) not in taken:
+                picked.append(f); taken.add(id(f))
 
     return picked[:n]
 
@@ -386,7 +410,8 @@ def report(copied, missing, stats, per_shop, months):
     for r in copied:
         ws.append([r["segment"], r["code"], r["name"], r["docdate"], r["kind"],
                    r["file"], round(r["size"] / 1024, 1), r["subj_kw"],
-                   r["fmt"], r["loc"], r["src"], r["dest"], r["status"]])
+                   r["fmt"], r["loc"], unlp(r["src"]), unlp(r["dest"]),
+                   r["status"]])
         st = r["status"]
         f = (GRN if st == "COPIED" else YEL if st == "ALREADY EXISTS" else REDF)
         ws.cell(row=ws.max_row, column=13).fill = f
@@ -395,7 +420,8 @@ def report(copied, missing, stats, per_shop, months):
     ws2 = wb.create_sheet("NO DOCUMENTS")
     _hdr(ws2, ["Segment", "Code", "Store Name", "Reason", "Expected Folder"])
     for m in missing:
-        ws2.append([m["segment"], m["code"], m["name"], m["reason"], m["folder"]])
+        ws2.append([m["segment"], m["code"], m["name"], m["reason"],
+                    unlp(m["folder"])])
         for c in ws2[ws2.max_row]:
             c.fill = ORG
     _aw(ws2)
