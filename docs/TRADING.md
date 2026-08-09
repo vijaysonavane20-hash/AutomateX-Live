@@ -171,9 +171,20 @@ pip install -r requirements-trading.txt
 
 ### 2. Get API credentials
 
-1. Log in at <https://smartapi.angelbroking.com/> with your Angel One client ID.
-2. **My Apps → Create App**, type **Trading API**. Note the **API key**.
-3. Enable **TOTP** at <https://smartapi.angelbroking.com/enable-totp>. When the
+1. Log in at <https://smartapi.angelone.in/> with your Angel One client ID.
+2. **My Apps → Create App**, type **Trading API**. The form requires:
+   - **Redirect URL** — any valid public `https://` URL. Localhost and
+     `127.0.0.1` are rejected. This system logs in with client code + MPIN +
+     TOTP, never the OAuth redirect flow, so the value is not used at runtime —
+     it only has to pass validation.
+   - **Primary Static IP** — the public IP that will call the API. Find yours
+     at <https://whatismyipaddress.com>. Home broadband is usually *dynamic*,
+     so this is a further reason to run from a VPS, which has a fixed IP. Use
+     the optional **Secondary Static IP** for your second machine (e.g. laptop
+     for testing, server for production).
+
+   Note the **API key** shown after creation.
+3. Enable **TOTP** at <https://smartapi.angelone.in/enable-totp>. When the
    QR code appears, save the **base32 secret string** — not the 6-digit code.
    You need the secret so the script can generate codes itself.
 
