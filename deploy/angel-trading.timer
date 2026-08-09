@@ -1,0 +1,22 @@
+# Starts the engine each trading weekday morning.
+#
+# The engine squares off at 15:10 and exits on its own, so there is no stop
+# timer. It also checks the market calendar at start-up and exits immediately
+# on holidays you have listed in config.yaml.
+#
+# IMPORTANT: OnCalendar follows the server clock. Set the server to IST first:
+#   sudo timedatectl set-timezone Asia/Kolkata
+#   timedatectl        # verify before trusting this timer
+
+[Unit]
+Description=Start the Angel One intraday engine on trading mornings
+
+[Timer]
+# 09:10 IST — a few minutes before the 09:15 open, leaving time to log in,
+# download the instrument master and warm up indicators.
+OnCalendar=Mon-Fri 09:10
+Persistent=false
+Unit=angel-trading.service
+
+[Install]
+WantedBy=timers.target

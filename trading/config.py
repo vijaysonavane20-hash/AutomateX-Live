@@ -119,6 +119,20 @@ class ExecutionConfig:
 
 
 @dataclass
+class NotificationConfig:
+    """Push alerts to a phone. The bot token and chat id come from the
+    environment (``<env_prefix>_BOT_TOKEN`` / ``<env_prefix>_CHAT_ID``), never
+    from this file."""
+
+    enabled: bool = False
+    env_prefix: str = "TELEGRAM"
+    notify_entries: bool = True
+    notify_exits: bool = True
+    notify_errors: bool = True
+    daily_summary: bool = True
+
+
+@dataclass
 class AppConfig:
     accounts: list[AccountConfig]
     symbols: list[str]
@@ -132,7 +146,7 @@ class AppConfig:
     risk: RiskConfig = field(default_factory=RiskConfig)
     session: SessionConfig = field(default_factory=SessionConfig)
     execution: ExecutionConfig = field(default_factory=ExecutionConfig)
-    telegram_enabled: bool = False
+    notifications: NotificationConfig = field(default_factory=NotificationConfig)
 
     @property
     def data_account(self) -> AccountConfig:
@@ -199,6 +213,7 @@ def load_config(path: str | Path, load_secrets: bool = True) -> AppConfig:
     risk = _build(RiskConfig, raw.pop("risk", {}) or {})
     session = _build_session(raw.pop("session", {}) or {})
     execution = _build(ExecutionConfig, raw.pop("execution", {}) or {})
+    notifications = _build(NotificationConfig, raw.pop("notifications", {}) or {})
 
     cfg = AppConfig(
         accounts=accounts,
@@ -207,6 +222,7 @@ def load_config(path: str | Path, load_secrets: bool = True) -> AppConfig:
         risk=risk,
         session=session,
         execution=execution,
+        notifications=notifications,
         **raw,
     )
 

@@ -25,8 +25,10 @@ from .config import AppConfig
 from .data import DataFeed
 from .execution import Executor, build_executor
 from .instruments import InstrumentMaster
+from .notifier import Notifier, NullNotifier, build_notifier
 from .positions import Position
 from .risk import RiskManager
+from . import notifier as notify
 from .strategy import Evaluation, Signal, evaluate, prepare
 from .utils import MarketCalendar, combine_ist, get_logger, now_ist
 
@@ -49,6 +51,7 @@ class TradingEngine:
         self.instruments: dict = {}
         self.feed: DataFeed | None = None
         self.executor: Executor | None = None
+        self.notifier: Notifier = NullNotifier()
 
         self.open_positions: dict[str, Position] = {}
         self.closed_positions: list[Position] = []
@@ -76,6 +79,8 @@ class TradingEngine:
     # ----------------------------------------------------------------- setup
 
     def setup(self) -> None:
+        self.notifier = build_notifier(self.cfg)
+
         log.info("=" * 78)
         log.info("MODE: %s", "LIVE — REAL MONEY" if self.is_live else "PAPER (simulated)")
         log.info(
@@ -122,6 +127,15 @@ class TradingEngine:
         signal.signal(signal.SIGINT, self._handle_signal)
         signal.signal(signal.SIGTERM, self._handle_signal)
 
+        self.notifier.send(
+            notify.fmt_startup(
+                "LIVE" if self.is_live else "PAPER",
+                len(self.pool.connected_brokers),
+                self.cfg.total_capital,
+                len(self.instruments),
+            )
+        )
+
     def _handle_signal(self, signum, _frame) -> None:
         log.warning("Signal %s received — shutting down after the current cycle.", signum)
         self._stop_requested = True
@@ -154,10 +168,12 @@ class TradingEngine:
                     break
 
                 self._tick(now)
-            except Exception:
+            except Exception as exc:
                 # A single bad cycle must never take the process down while
                 # positions are open — log it and carry on to the next tick.
                 log.exception("Unhandled error in cycle; continuing.")
+                if self.cfg.notifications.notify_errors:
+                    self.notifier.send(notify.fmt_error(f"Cycle error: {exc}"))
 
             time.sleep(self.cfg.session.poll_seconds)
 
@@ -261,9 +277,18 @@ class TradingEngine:
 
         self.open_positions.pop(position.symbol, None)
         self.closed_positions.append(position)
+
+        was_halted = self.risk.state.halted
         self.risk.record_exit(pnl)
         self._append_trade_log(position)
         log.info("Risk status: %s", self.risk.summary())
+
+        if self.cfg.notifications.notify_exits:
+            self.notifier.send(notify.fmt_exit(position, pnl, reason))
+        if self.risk.state.halted and not was_halted:
+            self.notifier.send(
+                notify.fmt_halt(self.risk.state.halt_reason, self.risk.state.realised_pnl)
+            )
 
     # ---------------------------------------------------------------- entries
 
@@ -332,6 +357,10 @@ class TradingEngine:
 
         self.open_positions[sig.symbol] = position
         self.risk.record_entry(sig.symbol)
+
+        if self.cfg.notifications.notify_entries:
+            self.notifier.send(notify.fmt_entry(position, position.total_quantity))
+
         log.info(
             "ENTERED %s %s | R:R %.2f | risk/unit %.2f | %s",
             sig.side, sig.symbol, sig.reward_risk, sig.risk_per_unit, self.risk.summary(),
@@ -368,6 +397,17 @@ class TradingEngine:
         self._square_off_all("shutdown")
         self.pool.disconnect_all()
         self.report()
+
+        if self.cfg.notifications.daily_summary:
+            pnls = [p.realised() for p in self.closed_positions]
+            self.notifier.send(
+                notify.fmt_summary(
+                    len(pnls), sum(1 for p in pnls if p > 0), sum(pnls),
+                    "LIVE" if self.is_live else "PAPER",
+                )
+            )
+        # Flush queued messages before the process exits.
+        self.notifier.close()
 
     def report(self) -> None:
         trades = self.closed_positions

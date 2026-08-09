@@ -182,6 +182,13 @@ You get a 10-second abort window before the first order.
 Start with the smallest capital that lets a single share be sized, and leave
 it there for weeks. Scale only on live evidence.
 
+### Run it on a server, watch it from your phone
+
+The engine needs an always-on machine — it cannot run on a phone, because iOS
+and Android both suspend background apps. **[docs/DEPLOY.md](DEPLOY.md)** covers
+where to host it, the systemd service and timer, and Telegram alerts so every
+entry, exit and halt reaches your phone.
+
 ---
 
 ## Multiple accounts
@@ -294,8 +301,11 @@ trading/
   positions.py            position model and trailing-stop logic
   execution.py            paper and live executors
   engine.py               the live loop
+  notifier.py             Telegram alerts (non-blocking, fail-safe)
   backtest.py             historical simulation of the same rules
-tests/test_trading.py     41 tests, no credentials or network needed
+deploy/                   systemd service + timer for a server
+docs/DEPLOY.md            server setup, Telegram alerts, phone monitoring
+tests/test_trading.py     47 tests, no credentials or network needed
 ```
 
 Run the tests with `python -m pytest tests/test_trading.py -v`, or

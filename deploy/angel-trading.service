@@ -1,0 +1,52 @@
+# systemd service for the Angel One intraday engine.
+#
+# Install:
+#   sudo cp deploy/angel-trading.* /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now angel-trading.timer
+#
+# Edit User, WorkingDirectory and ExecStart to match your server.
+# See docs/DEPLOY.md for the full walkthrough.
+
+[Unit]
+Description=Angel One intraday trading engine
+# Do not start before the network is genuinely usable — an engine that starts
+# without connectivity fails its login and exits.
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=trader
+Group=trader
+WorkingDirectory=/home/trader/AutomateX-Live
+
+# Paper mode. To go live, append --live here AND set confirm_live: true in
+# config.yaml. Both are required; neither alone starts live trading.
+ExecStart=/home/trader/AutomateX-Live/.venv/bin/python run_trading.py --config config.yaml
+
+# Only restart on abnormal exit. A clean exit means the session finished at
+# square-off, and restarting then would relaunch the engine after hours.
+Restart=on-failure
+RestartSec=30s
+# If it fails 3 times in 10 minutes, stop trying and leave it for a human.
+StartLimitBurst=3
+StartLimitIntervalSec=600
+
+# SIGTERM triggers the engine's square-off path; give it time to finish.
+KillSignal=SIGTERM
+TimeoutStopSec=120
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=angel-trading
+
+# Hardening — the engine only needs to write to its own directory.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/trader/AutomateX-Live/state /home/trader/AutomateX-Live/logs
+
+[Install]
+WantedBy=multi-user.target

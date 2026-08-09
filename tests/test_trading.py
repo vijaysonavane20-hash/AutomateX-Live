@@ -631,6 +631,97 @@ def test_config_rejects_out_of_order_session_times():
         _validate(cfg)
 
 
+# ------------------------------------------------------------- notifications
+
+def test_notifier_disabled_by_default():
+    from trading.notifier import NullNotifier, build_notifier
+
+    cfg = default_config()
+    assert isinstance(build_notifier(cfg), NullNotifier)
+    build_notifier(cfg).send("anything")  # must not raise
+
+
+def test_notifier_falls_back_when_credentials_are_absent():
+    import os
+
+    from trading.notifier import NullNotifier, build_notifier
+
+    cfg = default_config()
+    cfg.notifications.enabled = True
+    cfg.notifications.env_prefix = "NOTAREALPREFIX"
+    os.environ.pop("NOTAREALPREFIX_BOT_TOKEN", None)
+    os.environ.pop("NOTAREALPREFIX_CHAT_ID", None)
+
+    # Enabling notifications without credentials must degrade, not fail start-up.
+    assert isinstance(build_notifier(cfg), NullNotifier)
+
+
+def test_notifier_send_never_blocks_the_caller():
+    """The trading loop must not wait on the network. A send() into a notifier
+    whose delivery hangs has to return immediately."""
+    import time
+
+    from trading.notifier import TelegramNotifier
+
+    notifier = TelegramNotifier.__new__(TelegramNotifier)
+    notifier._queue = __import__("queue").Queue(maxsize=200)
+    notifier._failures = 0
+
+    start = time.monotonic()
+    for i in range(50):
+        notifier.send(f"message {i}")
+    assert time.monotonic() - start < 0.5
+
+
+def test_notifier_drops_messages_instead_of_blocking_when_full():
+    import queue as queue_mod
+
+    from trading.notifier import TelegramNotifier
+
+    notifier = TelegramNotifier.__new__(TelegramNotifier)
+    notifier._queue = queue_mod.Queue(maxsize=2)
+    notifier._failures = 0
+
+    for i in range(10):
+        notifier.send(f"m{i}")  # must not raise or hang
+    assert notifier._queue.qsize() == 2
+
+
+def test_notifier_survives_delivery_failure():
+    from trading.notifier import TelegramNotifier
+
+    notifier = TelegramNotifier.__new__(TelegramNotifier)
+    notifier._queue = __import__("queue").Queue()
+    notifier._failures = 0
+    notifier.token = "invalid"
+    notifier.chat_id = "0"
+    notifier.timeout = 1
+
+    # An unreachable host must be swallowed, never raised.
+    notifier._log_failure("simulated outage")
+    assert notifier._failures == 1
+
+
+def test_message_formatting_is_safe_for_all_fields():
+    from trading import notifier as n
+
+    pos = _position()
+    pos.reasons = ["ema_stack", "orb"]
+
+    assert "TESTSYM" in n.fmt_entry(pos, 100)
+    assert "LONG" in n.fmt_entry(pos, 100)
+
+    pos.legs["test"].exit_price = 104.0
+    pos.legs["test"].closed = True
+    assert "✅" in n.fmt_exit(pos, 400.0, "target")
+    assert "❌" in n.fmt_exit(pos, -200.0, "stop")
+
+    assert "No trades" in n.fmt_summary(0, 0, 0.0, "PAPER")
+    assert "50%" in n.fmt_summary(2, 1, 100.0, "PAPER")
+    assert n.fmt_halt("daily loss limit", -2000.0)
+    assert n.fmt_startup("PAPER", 1, 100000.0, 6)
+
+
 def _run_without_pytest() -> int:
     """Minimal runner so the suite works even where pytest is absent."""
     tests = [

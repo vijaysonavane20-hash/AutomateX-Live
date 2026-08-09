@@ -108,3 +108,15 @@ execution:
   slippage_bps: 5.0             # paper-fill realism, in basis points
   place_broker_stoploss: true   # server-side SL-M survives a crash — keep this on
   confirm_live: false           # live trading needs this true AND the --live flag
+
+# ----------------------------------------------------------- notifications
+# Telegram alerts to your phone. This is how you watch a session running on a
+# server from an iPhone/Android. Token and chat id come from .env, not here.
+# Setup instructions: docs/DEPLOY.md
+notifications:
+  enabled: false
+  env_prefix: TELEGRAM          # reads TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID
+  notify_entries: true
+  notify_exits: true
+  notify_errors: true
+  daily_summary: true
