@@ -1,0 +1,22 @@
+# Secrets — never commit these
+.env
+config.yaml
+
+# Trading runtime output
+state/
+logs/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.venv-trading/
+venv/
+.pytest_cache/
+*.egg-info/
+
+# Streamlit
+.streamlit/secrets.toml
+
+# OS
+.DS_Store

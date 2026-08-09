@@ -1,0 +1,110 @@
+# Angel One intraday trading — configuration
+#
+# Copy to config.yaml and edit. NO CREDENTIALS GO IN THIS FILE: each account
+# names an env_prefix, and the secrets are read from .env / the environment.
+#
+# Times must be quoted strings ("09:30"), otherwise YAML may read them as numbers.
+
+# ---------------------------------------------------------------- accounts
+# One entry per Angel One account. Every account trades the same signals,
+# sized independently against its own capital.
+accounts:
+  - name: primary
+    env_prefix: ANGEL_PRIMARY   # reads ANGEL_PRIMARY_API_KEY, _CLIENT_CODE, _MPIN, _TOTP_SECRET
+    enabled: true
+    capital: 100000             # capital this account allocates to intraday
+    risk_multiplier: 1.0        # scales this account's risk per trade
+    is_data_source: true        # exactly one account supplies market data
+
+  # - name: secondary
+  #   env_prefix: ANGEL_SECONDARY
+  #   enabled: true
+  #   capital: 50000
+  #   risk_multiplier: 1.0
+
+# ----------------------------------------------------------------- universe
+# Keep this short and liquid. Wide spreads eat an intraday edge alive, and
+# more symbols means more marginal trades, not better ones.
+exchange: NSE
+symbols:
+  - RELIANCE
+  - HDFCBANK
+  - ICICIBANK
+  - INFY
+  - TCS
+  - SBIN
+
+warmup_days: 5
+log_level: INFO
+state_dir: state
+log_dir: logs
+
+# NSE trading holidays for the year — update these annually.
+holidays:
+  # - "2026-01-26"
+  # - "2026-03-04"
+
+# ---------------------------------------------------------------- strategy
+strategy:
+  entry_interval: FIVE_MINUTE   # ONE/THREE/FIVE/TEN/FIFTEEN/THIRTY_MINUTE
+  htf_multiplier: 3             # 5-minute entries confirmed by 15-minute trend
+
+  ema_fast: 9
+  ema_slow: 21
+  htf_ema_fast: 9
+  htf_ema_slow: 21
+  rsi_period: 14
+  atr_period: 14
+  adx_period: 14
+  volume_lookback: 20
+  breakout_lookback: 12
+  supertrend_period: 10
+  supertrend_multiplier: 3.0
+
+  # Hard gates — fail any one and the bar is discarded regardless of score.
+  adx_min: 20.0                 # below this the market is chopping; raise to 25 to trade less
+  volume_multiple: 1.3
+  rsi_long_band: [52.0, 72.0]   # upper bound avoids buying an exhausted move
+  rsi_short_band: [28.0, 48.0]
+  min_atr_pct: 0.25             # skip symbols too quiet to pay for the spread
+  max_atr_pct: 4.0              # skip news-driven chaos
+
+  # Confluence threshold out of 19. Higher = fewer, cleaner setups.
+  # 14 is a deliberately high bar; validate any change with backtest.py.
+  min_score: 14
+
+  # Exits
+  atr_stop_multiple: 1.5
+  atr_target_multiple: 3.0      # 2:1 reward:risk before trailing
+  breakeven_at_r: 1.0           # move stop to entry once 1R is banked
+  trail_atr_multiple: 2.0
+
+# -------------------------------------------------------------------- risk
+# These limits are the reason the account survives a bad run. Loosen them
+# only after you have live evidence, never because a backtest looked good.
+risk:
+  risk_per_trade_pct: 0.5       # 0.5% of capital at risk per trade
+  max_daily_loss_pct: 2.0       # halt for the day at -2%
+  max_daily_profit_pct: 4.0     # also halt at +4% — protects a good day
+  max_open_positions: 3
+  max_trades_per_day: 6
+  max_trades_per_symbol_per_day: 2
+  max_position_value_pct: 25.0  # no single position exceeds 25% of capital
+
+# ----------------------------------------------------------------- session
+session:
+  entry_start: "09:30"          # skip the opening auction noise
+  entry_end: "14:45"            # no fresh entries this late
+  square_off: "15:10"           # flatten before the broker's own auto-square-off
+  opening_range_minutes: 15
+  poll_seconds: 20
+  bar_close_buffer_seconds: 8   # wait this long after a bar closes before acting
+
+# --------------------------------------------------------------- execution
+execution:
+  mode: paper                   # paper | live
+  product_type: INTRADAY
+  order_type: MARKET
+  slippage_bps: 5.0             # paper-fill realism, in basis points
+  place_broker_stoploss: true   # server-side SL-M survives a crash — keep this on
+  confirm_live: false           # live trading needs this true AND the --live flag
