@@ -3,8 +3,12 @@
 #   pip install -r requirements-trading.txt
 
 smartapi-python>=1.4.8
-pyotp>=2.9.0
+# smartapi-python imports logzero and websocket at module load but does not
+# declare either. Without them `pip install` succeeds and `import SmartApi`
+# then fails at runtime, so both are pinned here explicitly.
+logzero>=1.7.0
 websocket-client>=1.7.0
+pyotp>=2.9.0
 pandas>=2.0.0
 numpy>=1.24.0
 PyYAML>=6.0

@@ -12,6 +12,7 @@ comparable to live behaviour.
 from __future__ import annotations
 
 import sys
+from contextlib import contextmanager
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -19,6 +20,22 @@ import numpy as np
 import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+
+@contextmanager
+def assert_raises(exc_type, match: str = ""):
+    """Local stand-in for pytest.raises, so the suite genuinely runs with no
+    pytest installed — which is the state a fresh server is in."""
+    try:
+        yield
+    except exc_type as exc:
+        if match and match not in str(exc):
+            raise AssertionError(
+                f"{exc_type.__name__} raised but message {str(exc)!r} "
+                f"does not contain {match!r}"
+            ) from None
+        return
+    raise AssertionError(f"expected {exc_type.__name__}, nothing was raised")
 
 from trading import indicators as ind
 from trading.config import (
@@ -667,38 +684,32 @@ def test_order_id_extraction_handles_every_known_shape():
 # ------------------------------------------------------------------ config
 
 def test_config_rejects_a_reward_risk_below_one():
-    import pytest
-
     from trading.config import _validate
 
     cfg = default_config()
     cfg.strategy.atr_target_multiple = 1.0
     cfg.strategy.atr_stop_multiple = 2.0
-    with pytest.raises(ValueError, match="reward:risk"):
+    with assert_raises(ValueError, match="reward:risk"):
         _validate(cfg)
 
 
 def test_config_rejects_daily_loss_below_trade_risk():
-    import pytest
-
     from trading.config import _validate
 
     cfg = default_config()
     cfg.risk.risk_per_trade_pct = 3.0
     cfg.risk.max_daily_loss_pct = 2.0
-    with pytest.raises(ValueError, match="max_daily_loss_pct"):
+    with assert_raises(ValueError, match="max_daily_loss_pct"):
         _validate(cfg)
 
 
 def test_config_rejects_out_of_order_session_times():
-    import pytest
-
     from trading.config import _validate
     from datetime import time as dtime
 
     cfg = default_config()
     cfg.session.entry_end = dtime(9, 0)
-    with pytest.raises(ValueError, match="session times"):
+    with assert_raises(ValueError, match="session times"):
         _validate(cfg)
 
 
@@ -829,9 +840,7 @@ def test_screener_survives_missing_and_unresolvable_symbols():
 
 
 def test_screener_requires_a_universe():
-    import pytest
-
-    with pytest.raises(ValueError, match="universe"):
+    with assert_raises(ValueError, match="universe"):
         _screener({}, []).shortlist()
 
 

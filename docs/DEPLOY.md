@@ -44,7 +44,26 @@ is plenty.
 
 ---
 
-## Server setup (Ubuntu)
+## Server setup — one command
+
+On a fresh Ubuntu server:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/vijaysonavane20-hash/AutomateX-Live/claude/angle-broking-intraday-script-csqgae/deploy/setup-vps.sh | bash
+```
+
+This sets the clock to IST, installs Python and git, clones the repo, builds
+the virtualenv, copies the config templates and installs the systemd service
+and timer. It prints your server's public IP at the end — that address has to
+be registered with Angel.
+
+It deliberately does **not** write credentials, enable live trading, or start
+the timer. Re-running it is safe: an existing `.env` or `config.yaml` is never
+overwritten.
+
+The manual equivalent is below.
+
+## Server setup (Ubuntu, manual)
 
 ```bash
 # 1. Set the clock to IST — TOTP login fails on a drifting clock, and the
