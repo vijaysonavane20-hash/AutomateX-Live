@@ -28,6 +28,7 @@ from .instruments import InstrumentMaster
 from .notifier import Notifier, NullNotifier, build_notifier
 from .positions import Position
 from .risk import RiskManager
+from .screener import Screener, format_shortlist
 from . import notifier as notify
 from .strategy import Evaluation, Signal, evaluate, prepare
 from .utils import MarketCalendar, combine_ist, get_logger, now_ist
@@ -46,7 +47,10 @@ class TradingEngine:
         self.cfg = cfg
         self.calendar = MarketCalendar(cfg.holidays)
         self.pool = AccountPool(cfg.trading_accounts)
-        self.risk = RiskManager(cfg.risk, cfg.total_capital)
+        self.risk = RiskManager(
+            cfg.risk, cfg.total_capital, cfg.execution.leverage_multiple
+        )
+        self.shortlist: list = []
 
         self.instruments: dict = {}
         self.feed: DataFeed | None = None
@@ -94,9 +98,12 @@ class TradingEngine:
 
         master = InstrumentMaster(self.cfg.state_dir)
         master.load()
-        self.instruments = master.resolve_all(self.cfg.symbols, self.cfg.exchange)
-        log.info("Tracking %d symbol(s): %s", len(self.instruments),
-                 ", ".join(self.instruments))
+        self.instruments = self._select_symbols(master)
+        if not self.instruments:
+            log.warning("No tradeable symbols today — the engine will idle.")
+        else:
+            log.info("Tracking %d symbol(s): %s", len(self.instruments),
+                     ", ".join(self.instruments))
 
         self.feed = DataFeed(
             self.pool.data, self.instruments,
@@ -135,6 +142,48 @@ class TradingEngine:
                 len(self.instruments),
             )
         )
+
+    def _position_budget(self) -> float:
+        """Rupee value one position may occupy, taken from the *smallest*
+        enabled account so the shortlist is tradeable by every account."""
+        smallest = min(a.capital for a in self.cfg.trading_accounts)
+        return smallest * self.cfg.risk.max_position_value_pct / 100.0
+
+    def _select_symbols(self, master: InstrumentMaster) -> dict:
+        """Today's tradeable set: screened each morning, or the fixed list."""
+        if not self.cfg.screener.enabled:
+            return master.resolve_all(self.cfg.symbols, self.cfg.exchange)
+
+        screener = Screener(self.pool.data, master, self.cfg.screener, self.cfg.exchange)
+        budget = self._position_budget()
+        log.info(
+            "Screening for today (per-position budget ₹%s, leverage %.1fx).",
+            f"{budget:,.0f}", self.cfg.execution.leverage_multiple,
+        )
+
+        try:
+            results = screener.shortlist(budget)
+        except Exception as exc:
+            log.error("Screening failed (%s).", exc)
+            if self.cfg.symbols:
+                log.warning("Falling back to the configured 'symbols' list.")
+                return master.resolve_all(self.cfg.symbols, self.cfg.exchange)
+            raise
+
+        self.shortlist = results
+        self.notifier.send(format_shortlist(results))
+        return {r.symbol: r.instrument for r in results}
+
+    def _deployed_value(self, account_name: str) -> float:
+        """What this account already holds at cost, across open positions.
+        Subtracted from buying power so positions cannot each claim the full
+        balance and quietly add up to leverage."""
+        total = 0.0
+        for position in self.open_positions.values():
+            leg = position.legs.get(account_name)
+            if leg is not None and not leg.closed:
+                total += leg.entry_price * leg.quantity
+        return total
 
     def _handle_signal(self, signum, _frame) -> None:
         log.warning("Signal %s received — shutting down after the current cycle.", signum)
@@ -336,11 +385,13 @@ class TradingEngine:
         sizes: dict[str, int] = {}
         for account in self.cfg.trading_accounts:
             broker = self.pool.brokers.get(account.name)
-            margin = (
+            cash = (
                 broker.available_margin() if (self.is_live and broker and broker.connected) else None
             )
             qty, bound = self.risk.position_size(
-                account, sig.entry_ref, sig.stop, inst.lot_size, margin
+                account, sig.entry_ref, sig.stop, inst.lot_size,
+                available_cash=cash,
+                deployed_value=self._deployed_value(account.name),
             )
             if qty > 0:
                 sizes[account.name] = qty

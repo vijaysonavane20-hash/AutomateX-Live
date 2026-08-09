@@ -306,6 +306,77 @@ def test_size_is_zero_when_a_single_unit_exceeds_the_budget():
     assert qty == 0 and "zero" in reason
 
 
+def test_no_leverage_by_default():
+    """The core guarantee: with leverage_multiple at 1.0 a position can never
+    cost more than the cash the account holds."""
+    rm = RiskManager(
+        RiskConfig(risk_per_trade_pct=50.0, max_position_value_pct=100.0,
+                   max_total_exposure_pct=100.0),
+        100_000, leverage_multiple=1.0,
+    )
+    account = AccountConfig(name="a", env_prefix="A", capital=100_000)
+
+    # A huge risk budget and a tight stop would otherwise size enormously.
+    qty, bound = rm.position_size(account, entry_price=100.0, stop_price=99.9)
+    assert qty * 100.0 <= 100_000, f"{qty} shares costs more than the balance"
+    assert bound in ("position cap", "total exposure")
+
+
+def test_total_exposure_accounts_for_open_positions():
+    """Per-position caps must not compound into leverage across positions."""
+    rm = RiskManager(
+        RiskConfig(risk_per_trade_pct=50.0, max_position_value_pct=100.0,
+                   max_total_exposure_pct=100.0),
+        100_000, leverage_multiple=1.0,
+    )
+    account = AccountConfig(name="a", env_prefix="A", capital=100_000)
+
+    qty, _ = rm.position_size(account, 100.0, 99.0, deployed_value=0.0)
+    assert qty == 1000
+
+    # With 60,000 already committed only 40,000 of room remains.
+    qty, bound = rm.position_size(account, 100.0, 99.0, deployed_value=60_000.0)
+    assert qty == 400 and bound == "total exposure"
+
+    # Fully deployed means no new position at all.
+    qty, _ = rm.position_size(account, 100.0, 99.0, deployed_value=100_000.0)
+    assert qty == 0
+
+
+def test_available_cash_is_not_multiplied_without_leverage():
+    rm = RiskManager(RiskConfig(risk_per_trade_pct=50.0, max_position_value_pct=100.0),
+                     100_000, leverage_multiple=1.0)
+    account = AccountConfig(name="a", env_prefix="A", capital=100_000)
+
+    # Only 10,000 of cash actually available -> at most 100 shares at 100.
+    qty, bound = rm.position_size(account, 100.0, 99.0, available_cash=10_000.0)
+    assert qty == 100 and bound == "available cash"
+
+
+def test_leverage_multiple_above_one_expands_buying_power():
+    """Opt-in leverage must actually work — but only when asked for."""
+    account = AccountConfig(name="a", env_prefix="A", capital=100_000)
+    cfg = RiskConfig(risk_per_trade_pct=50.0, max_position_value_pct=100.0,
+                     max_total_exposure_pct=100.0)
+
+    flat = RiskManager(cfg, 100_000, leverage_multiple=1.0)
+    levered = RiskManager(cfg, 100_000, leverage_multiple=3.0)
+
+    assert flat.buying_power(account) == 100_000
+    assert levered.buying_power(account) == 300_000
+    assert levered.max_exposure(account) == 300_000  # cfg sets 100%
+    assert levered.position_size(account, 100.0, 99.0)[0] > flat.position_size(
+        account, 100.0, 99.0
+    )[0]
+
+
+def test_exposure_cap_leaves_headroom_by_default():
+    rm = RiskManager(RiskConfig(), 100_000)  # max_total_exposure_pct defaults to 95
+    account = AccountConfig(name="a", env_prefix="A", capital=100_000)
+    assert rm.buying_power(account) == 100_000   # cash only
+    assert rm.max_exposure(account) == 95_000    # with headroom for fees/moves
+
+
 def test_lot_size_rounds_down():
     rm = RiskManager(RiskConfig(risk_per_trade_pct=1.0), 100_000)
     account = AccountConfig(name="a", env_prefix="A", capital=100_000)
@@ -629,6 +700,148 @@ def test_config_rejects_out_of_order_session_times():
     cfg.session.entry_end = dtime(9, 0)
     with pytest.raises(ValueError, match="session times"):
         _validate(cfg)
+
+
+# ---------------------------------------------------------------- screener
+
+class _FakeBroker:
+    """Serves daily candles from a dict, so the screener can be tested with no
+    network and no credentials."""
+
+    def __init__(self, frames: dict[str, pd.DataFrame]):
+        self.frames = frames
+        self.calls = 0
+
+    def candles(self, exchange, token, interval, start, end):
+        self.calls += 1
+        return self.frames.get(token, pd.DataFrame())
+
+
+class _FakeMaster:
+    def __init__(self, symbols):
+        self.symbols = symbols
+
+    def resolve(self, symbol, exchange="NSE"):
+        if symbol not in self.symbols:
+            raise ValueError(f"{symbol} not found")
+        return Instrument(
+            token=symbol, trading_symbol=f"{symbol}-EQ", name=symbol,
+            exchange=exchange, lot_size=1, tick_size=0.05, instrument_type="",
+        )
+
+
+def _daily_series(days=40, price=1000.0, volume=1_000_000.0, drift=0.004, noise=0.012, seed=3):
+    rng = np.random.default_rng(seed)
+    rows, ts = [], pd.Timestamp("2025-01-01", tz=IST)
+    for _ in range(days):
+        ret = drift + rng.normal(0, noise)
+        open_p, close_p = price, max(price * (1 + ret), 1.0)
+        wick = abs(rng.normal(0, noise)) * open_p
+        rows.append({
+            "timestamp": ts, "open": open_p,
+            "high": max(open_p, close_p) + wick, "low": min(open_p, close_p) - wick,
+            "close": close_p, "volume": volume,
+        })
+        price = close_p
+        ts += timedelta(days=1)
+    return pd.DataFrame(rows).set_index("timestamp").astype(float)
+
+
+def _screener(frames, universe, **overrides):
+    from trading.config import ScreenerConfig
+    from trading.screener import Screener
+
+    cfg = ScreenerConfig(enabled=True, universe=universe)
+    for key, value in overrides.items():
+        setattr(cfg, key, value)
+    return Screener(_FakeBroker(frames), _FakeMaster(set(universe)), cfg)
+
+
+def test_screener_filters_illiquid_names():
+    frames = {
+        "LIQUID": _daily_series(volume=5_000_000, price=1000.0),
+        "ILLIQUID": _daily_series(volume=500, price=1000.0, seed=9),
+    }
+    result = _screener(frames, ["LIQUID", "ILLIQUID"], min_turnover_crore=50.0).shortlist()
+    assert [r.symbol for r in result] == ["LIQUID"]
+
+
+def test_screener_filters_on_price_band():
+    frames = {
+        "CHEAP": _daily_series(price=20.0, volume=50_000_000),
+        "PRICEY": _daily_series(price=90_000.0, volume=500_000, seed=5),
+        "OK": _daily_series(price=1500.0, volume=5_000_000, seed=7),
+    }
+    result = _screener(
+        frames, ["CHEAP", "PRICEY", "OK"], min_price=100.0, max_price=5000.0
+    ).shortlist()
+    assert [r.symbol for r in result] == ["OK"]
+
+
+def test_screener_drops_unaffordable_names_when_leverage_is_off():
+    """A share costing more than the per-position budget cannot be bought
+    without leverage, so it must not reach the shortlist."""
+    frames = {
+        "BIG": _daily_series(price=4_500.0, volume=5_000_000),
+        "SMALL": _daily_series(price=800.0, volume=5_000_000, seed=11),
+    }
+    # max_price is widened so the price band cannot be what rejects BIG —
+    # this test is about affordability alone.
+    screener = _screener(
+        frames, ["BIG", "SMALL"], require_affordable=True, max_price=100_000.0
+    )
+
+    # A 2,000 rupee budget: BIG costs more than that per share, SMALL doesn't.
+    result = screener.shortlist(position_budget=2_000.0)
+    assert [r.symbol for r in result] == ["SMALL"]
+
+    # With a large budget both qualify.
+    assert len(screener.shortlist(position_budget=100_000.0)) == 2
+
+
+def test_screener_respects_shortlist_size_and_orders_by_score():
+    frames = {
+        f"SYM{i}": _daily_series(price=1000.0, volume=1_000_000 * (i + 1), seed=i)
+        for i in range(8)
+    }
+    result = _screener(
+        frames, list(frames), shortlist_size=3, min_turnover_crore=1.0
+    ).shortlist()
+
+    assert len(result) == 3
+    scores = [r.score for r in result]
+    assert scores == sorted(scores, reverse=True)
+
+
+def test_screener_returns_empty_rather_than_trading_junk():
+    """If nothing passes, the correct answer is to trade nothing."""
+    frames = {"BAD": _daily_series(volume=10, price=5.0)}
+    assert _screener(frames, ["BAD"], min_turnover_crore=500.0).shortlist() == []
+
+
+def test_screener_survives_missing_and_unresolvable_symbols():
+    frames = {"GOOD": _daily_series(volume=5_000_000, price=1000.0)}
+    # NOTLISTED resolves but has no data; GHOST does not resolve at all.
+    screener = _screener(frames, ["GOOD", "NOTLISTED"], min_turnover_crore=1.0)
+    screener.master.symbols = {"GOOD", "NOTLISTED"}
+    result = screener.shortlist()
+    assert [r.symbol for r in result] == ["GOOD"]
+
+
+def test_screener_requires_a_universe():
+    import pytest
+
+    with pytest.raises(ValueError, match="universe"):
+        _screener({}, []).shortlist()
+
+
+def test_screener_makes_one_call_per_symbol():
+    """Rate limits matter: 60+ symbols at 2 requests/second is already a
+    minute of start-up time. A regression to N calls per symbol would blow it."""
+    frames = {f"S{i}": _daily_series(seed=i) for i in range(10)}
+    screener = _screener(frames, list(frames), min_turnover_crore=1.0)
+    screener.shortlist()
+    assert screener.broker.calls == 10
 
 
 # ------------------------------------------------------------- notifications

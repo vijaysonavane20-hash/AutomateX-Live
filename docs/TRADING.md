@@ -33,6 +33,77 @@ reported expectancy before believing any number.
 
 ---
 
+## Picking the day's shares automatically
+
+With `screener.enabled: true` the engine chooses what to trade each morning
+instead of using a fixed list. At start-up it pulls daily candles for every
+name in `screener.universe`, applies hard filters, ranks the survivors and
+trades the top `shortlist_size`.
+
+| Filter | Default | Why |
+|---|---|---|
+| Average daily turnover | ≥ ₹50 cr | The most important one. Wide spreads eat an intraday edge, and illiquid names gap through stops |
+| Price band | ₹100–5,000 | Skips penny stocks and names too expensive to size |
+| Daily ATR | 1–6% | Must move enough to pay for a round trip, but not be news-driven chaos |
+| Daily ADX | ≥ 15 | Must actually trend — this strategy trades continuation |
+| Affordable | on | One share must fit the per-position budget. Without leverage, anything pricier is untradeable |
+
+Survivors are ranked on liquidity (40%), volatility (30%) and trend quality
+(30%), using **percentile ranks** rather than raw values so one enormous
+turnover can't drown out the other criteria.
+
+The screen selects for **tradeable mechanics — not opinions**. It reads no
+news, no fundamentals and no recommendations. A stock appearing on the
+shortlist means "this is liquid and moving enough to trade", not "this will go
+up".
+
+Two behaviours worth knowing:
+
+- **If nothing passes, nothing trades.** An empty shortlist means the engine
+  idles for the day. That is the correct outcome, not a failure — relax the
+  filters only if you've checked *why* it's empty.
+- **If screening fails** (API trouble), it falls back to your fixed `symbols`
+  list rather than dying.
+
+Cost is one API call per universe symbol, so ~70 names adds about a minute to
+start-up. You get the shortlist on Telegram before the market opens.
+
+To go back to a fixed list, set `screener.enabled: false`.
+
+---
+
+## Leverage: off by default
+
+`execution.leverage_multiple: 1.0` means **cash only**. Position sizes are
+capped at the balance you actually hold — the engine never uses Angel's MIS
+margin, even though the product type allows it.
+
+Four independent ceilings apply to every position; the smallest wins:
+
+1. **Risk budget** — 0.5% of capital ÷ stop distance (the usual driver)
+2. **Per-position cap** — 25% of buying power
+3. **Total exposure** — 95% of buying power, *minus what open positions
+   already cost*
+4. **Available cash** — live only, straight from Angel's RMS
+
+Point 3 matters more than it looks. Without it, three positions could each
+claim 25% of the full balance while ignoring each other, and per-position caps
+would quietly compound into leverage. The engine subtracts capital already
+committed, so the combined value of everything open can never exceed your cash:
+
+```
+Capital ₹100,000, RELIANCE @ ₹2,500, stop ₹2,450
+  -> 10 shares = ₹25,000        (bound by risk)
+With ₹90,000 already deployed
+  -> 2 shares                   (bound by total exposure)
+```
+
+Raising `leverage_multiple` above 1.0 borrows from the broker. At 2x a 2%
+adverse move becomes a 4% account loss, and Angel's auto-square-off — not your
+stop — starts deciding when you exit. The engine logs a warning if you do it.
+
+---
+
 ## What the strategy actually does
 
 A **gated, score-based trend-continuation** setup on 5-minute bars, confirmed
@@ -238,6 +309,8 @@ Every one of these is a hard block, not a warning.
 | `max_trades_per_day` | 6 | Stops revenge-trading a bad morning |
 | `max_trades_per_symbol_per_day` | 2 | Stops one choppy symbol draining the day |
 | `max_position_value_pct` | 25% | No single position dominates the account |
+| `max_total_exposure_pct` | 95% | Combined value of all open positions. This is what makes "no leverage" real |
+| `leverage_multiple` | 1.0 | Cash only. Above 1.0 borrows from the broker |
 
 Position sizing is fixed-fractional: risk a constant small fraction, and let
 the stop distance decide the quantity. A wide stop gets a small position, a
@@ -268,6 +341,8 @@ days before and after.
 
 | Symptom | Try |
 |---|---|
+| Shortlist is empty every day | Lower `screener.min_turnover_crore`, or widen the ATR band. Check the log for which filter rejected what |
+| Shortlist picks names you can't size | Lower `screener.max_price`, or raise capital. `require_affordable` already drops the worst cases |
 | Too few trades | Lower `min_score` (14 → 12), or `adx_min` (20 → 18) |
 | Too many marginal trades | Raise `min_score` (14 → 16) |
 | Stopped out then price runs your way | Raise `atr_stop_multiple` (1.5 → 2.0) |
@@ -296,8 +371,9 @@ trading/
   broker.py               SmartAPI wrapper + multi-account pool
   data.py                 candle store; closed-bar access
   indicators.py           pandas-only EMA/RSI/ATR/ADX/VWAP/Supertrend
+  screener.py             daily shortlist — picks which shares to trade
   strategy.py             the trading rules (gates + scoring)
-  risk.py                 position sizing and daily limits
+  risk.py                 position sizing, leverage and daily limits
   positions.py            position model and trailing-stop logic
   execution.py            paper and live executors
   engine.py               the live loop
@@ -305,7 +381,7 @@ trading/
   backtest.py             historical simulation of the same rules
 deploy/                   systemd service + timer for a server
 docs/DEPLOY.md            server setup, Telegram alerts, phone monitoring
-tests/test_trading.py     47 tests, no credentials or network needed
+tests/test_trading.py     60 tests, no credentials or network needed
 ```
 
 Run the tests with `python -m pytest tests/test_trading.py -v`, or

@@ -32,10 +32,19 @@ class DayState:
 
 
 class RiskManager:
-    def __init__(self, cfg: RiskConfig, total_capital: float):
+    def __init__(
+        self, cfg: RiskConfig, total_capital: float, leverage_multiple: float = 1.0
+    ):
         self.cfg = cfg
         self.total_capital = float(total_capital)
+        self.leverage_multiple = max(1.0, float(leverage_multiple))
         self.state = DayState(day=now_ist().date())
+        if self.leverage_multiple > 1.0:
+            log.warning(
+                "Leverage is set to %.1fx — losses are magnified by the same factor "
+                "and the broker's auto-square-off may act before your stop does.",
+                self.leverage_multiple,
+            )
 
     # ------------------------------------------------------------- day cycle
 
@@ -95,19 +104,46 @@ class RiskManager:
 
     # ---------------------------------------------------------------- sizing
 
+    def buying_power(self, account: AccountConfig) -> float:
+        """Gross rupee value this account can command.
+
+        With the default ``leverage_multiple`` of 1.0 this is exactly the
+        account's own cash — no broker margin is used. Raising it above 1.0
+        means borrowing: a 2% adverse move becomes a 4% account loss at 2x, and
+        the broker's auto-square-off, not your stop, starts deciding when you
+        exit. The default is deliberate.
+
+        Both the per-position cap and the total-exposure cap are shares of this
+        figure, so the two scale together and cannot contradict each other.
+        """
+        return account.capital * self.leverage_multiple
+
+    def max_exposure(self, account: AccountConfig) -> float:
+        """Ceiling on the combined value of all open positions."""
+        return self.buying_power(account) * self.cfg.max_total_exposure_pct / 100.0
+
     def position_size(
         self,
         account: AccountConfig,
         entry_price: float,
         stop_price: float,
         lot_size: int = 1,
-        available_margin: float | None = None,
+        available_cash: float | None = None,
+        deployed_value: float = 0.0,
     ) -> tuple[int, str]:
-        """Quantity for one account, and a note on what bound it.
+        """Quantity for one account, and a note on which limit bound it.
 
-        Bounded by three things in order: the risk budget, the maximum share of
-        capital allowed in one position, and (live only) the margin actually
-        available.
+        Four independent ceilings; the smallest wins:
+
+        1. **Risk budget** — the usual driver: risk ÷ stop distance.
+        2. **Per-position cap** — no single name dominates the account.
+        3. **Total exposure** — capital already committed to open positions is
+           subtracted, so three positions cannot each claim the full balance.
+           Without this, per-position caps silently compound into leverage.
+        4. **Available cash** — live only, straight from the broker's RMS.
+
+        `deployed_value` is what this account already holds at cost. Passing 0
+        (the default) treats the account as flat.
         """
         risk_per_unit = abs(entry_price - stop_price)
         if risk_per_unit <= 0 or entry_price <= 0:
@@ -116,31 +152,31 @@ class RiskManager:
         risk_budget = (
             account.capital * self.cfg.risk_per_trade_pct / 100.0 * account.risk_multiplier
         )
-        qty_by_risk = risk_budget / risk_per_unit
+        limits: list[tuple[float, str]] = [(risk_budget / risk_per_unit, "risk")]
 
-        max_value = account.capital * self.cfg.max_position_value_pct / 100.0
-        qty_by_value = max_value / entry_price
+        gross = self.buying_power(account)
+        max_value = gross * self.cfg.max_position_value_pct / 100.0
+        limits.append((max_value / entry_price, "position cap"))
 
-        qty = min(qty_by_risk, qty_by_value)
-        bound = "risk" if qty_by_risk <= qty_by_value else "position cap"
+        remaining = max(0.0, self.max_exposure(account) - max(0.0, deployed_value))
+        limits.append((remaining / entry_price, "total exposure"))
 
-        if available_margin is not None:
-            # 5x is the usual intraday MIS leverage on cash; the broker's own
-            # RMS is still the final authority.
-            qty_by_margin = (available_margin * 5.0) / entry_price
-            if qty_by_margin < qty:
-                qty, bound = qty_by_margin, "available margin"
+        if available_cash is not None:
+            usable = max(0.0, available_cash) * self.leverage_multiple
+            limits.append((usable / entry_price, "available cash"))
+
+        qty, bound = min(limits, key=lambda pair: pair[0])
 
         if lot_size > 1:
-            lots = math.floor(qty / lot_size)
-            final = lots * lot_size
+            final = math.floor(qty / lot_size) * lot_size
         else:
             final = math.floor(qty)
 
         if final <= 0:
             return 0, (
-                f"sized to zero (risk budget {risk_budget:,.0f}, "
-                f"stop distance {risk_per_unit:.2f}, lot {lot_size})"
+                f"sized to zero — bound by {bound} "
+                f"(price {entry_price:,.2f}, stop distance {risk_per_unit:.2f}, "
+                f"risk budget {risk_budget:,.0f}, lot {lot_size})"
             )
         return int(final), bound
 

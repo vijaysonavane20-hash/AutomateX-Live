@@ -170,6 +170,53 @@ journalctl -u angel-trading --since today   # today's session
 Run it manually first for a few days before enabling the timer. You want to see
 it behave before it starts on its own.
 
+### What happens each morning
+
+```
+09:10  timer fires; engine logs in to every account
+09:10  screener pulls daily candles for the universe (~1 min)
+       -> shortlist arrives on your phone
+09:12  warm-up: intraday history for the shortlisted names
+09:15  market opens (no entries yet)
+09:30  entries begin
+14:45  no new entries
+15:10  every position squared off; engine exits
+       -> daily summary arrives on your phone
+```
+
+Weekends and any holidays listed in `config.yaml` are skipped automatically.
+
+### Switching it to live
+
+Two changes, both required:
+
+```yaml
+# config.yaml
+execution:
+  mode: live
+  confirm_live: true
+  leverage_multiple: 1.0    # keep at 1.0 for cash-only trading
+```
+
+```
+# /etc/systemd/system/angel-trading.service
+ExecStart=/home/trader/AutomateX-Live/.venv/bin/python run_trading.py --config config.yaml --live
+```
+
+```bash
+sudo systemctl daemon-reload
+```
+
+Neither switch alone does anything — that's the point. Verify with
+`journalctl -u angel-trading | grep MODE` after the next run; it prints
+`MODE: LIVE — REAL MONEY` or `MODE: PAPER (simulated)`.
+
+Before you flip it, confirm your account has **cash available for intraday
+trading**, not just holdings. With `leverage_multiple: 1.0` the engine sizes
+against real balance, so an account with ₹5,000 free will take very small
+positions or none at all — and `sized to zero` in the log means exactly that,
+not a bug.
+
 ---
 
 ## Monitoring from the iPhone

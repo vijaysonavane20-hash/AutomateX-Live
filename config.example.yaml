@@ -23,8 +23,9 @@ accounts:
   #   risk_multiplier: 1.0
 
 # ----------------------------------------------------------------- universe
-# Keep this short and liquid. Wide spreads eat an intraday edge alive, and
-# more symbols means more marginal trades, not better ones.
+# Used when the screener is disabled, and as the fallback if screening fails.
+# Keep it short and liquid — more symbols means more marginal trades, not
+# better ones.
 exchange: NSE
 symbols:
   - RELIANCE
@@ -33,6 +34,109 @@ symbols:
   - INFY
   - TCS
   - SBIN
+
+# ---------------------------------------------------------------- screener
+# Picks the day's shares automatically each morning instead of trading a fixed
+# list. It screens `universe` on daily candles and keeps the best few.
+#
+# It selects for tradeable mechanics — liquidity, volatility, trend quality —
+# not for opinions about which company will do well. Nothing here reads news
+# or fundamentals.
+#
+# Cost: one API call per universe symbol at start-up, so ~60 names takes about
+# a minute. Names that no longer exist are skipped harmlessly.
+screener:
+  enabled: true
+  shortlist_size: 6             # how many to trade today
+  lookback_days: 20
+
+  # Hard filters — a name must clear all of them to be ranked at all.
+  min_turnover_crore: 50.0      # average daily traded value; the key liquidity gate
+  min_price: 100.0              # skip penny stocks
+  max_price: 5000.0             # cap so one share fits the per-position budget
+  min_atr_pct: 1.0              # must move enough to pay for a round trip
+  max_atr_pct: 6.0              # skip news-driven chaos
+  min_adx: 15.0                 # must actually trend rather than oscillate
+  require_affordable: true      # drop names one share of which exceeds the budget
+
+  # Ranking weights (normalised internally).
+  weight_liquidity: 0.4
+  weight_volatility: 0.3
+  weight_trend: 0.3
+
+  # Edit freely. Index membership changes over time; unresolvable names are
+  # skipped with a log line rather than causing an error.
+  universe:
+    - RELIANCE
+    - HDFCBANK
+    - ICICIBANK
+    - INFY
+    - TCS
+    - SBIN
+    - BHARTIARTL
+    - ITC
+    - LT
+    - KOTAKBANK
+    - AXISBANK
+    - HINDUNILVR
+    - BAJFINANCE
+    - MARUTI
+    - ASIANPAINT
+    - TITAN
+    - SUNPHARMA
+    - ULTRACEMCO
+    - WIPRO
+    - HCLTECH
+    - TATAMOTORS
+    - TATASTEEL
+    - POWERGRID
+    - NTPC
+    - ONGC
+    - COALINDIA
+    - JSWSTEEL
+    - GRASIM
+    - ADANIENT
+    - ADANIPORTS
+    - TECHM
+    - INDUSINDBK
+    - CIPLA
+    - DRREDDY
+    - BAJAJFINSV
+    - HDFCLIFE
+    - SBILIFE
+    - BRITANNIA
+    - EICHERMOT
+    - HEROMOTOCO
+    - APOLLOHOSP
+    - TATACONSUM
+    - BPCL
+    - HINDALCO
+    - DLF
+    - GODREJCP
+    - DABUR
+    - HAVELLS
+    - BANKBARODA
+    - CANBK
+    - FEDERALBNK
+    - MOTHERSON
+    - SIEMENS
+    - LTIM
+    - MPHASIS
+    - PERSISTENT
+    - COFORGE
+    - TRENT
+    - MARICO
+    - CHOLAFIN
+    - GAIL
+    - LUPIN
+    - AUROPHARMA
+    - BIOCON
+    - TATAPOWER
+    - RECLTD
+    - PFC
+    - IRCTC
+    - INDIGO
+    - VEDL
 
 warmup_days: 5
 log_level: INFO
@@ -90,6 +194,11 @@ risk:
   max_trades_per_day: 6
   max_trades_per_symbol_per_day: 2
   max_position_value_pct: 25.0  # no single position exceeds 25% of capital
+  # Combined value of ALL open positions, as a share of buying power. With
+  # leverage_multiple at 1.0 this guarantees you never commit more than the
+  # cash you hold. Without this cap, per-position limits compound into
+  # leverage (3 positions x 25% is fine; 3 x 50% is not).
+  max_total_exposure_pct: 95.0
 
 # ----------------------------------------------------------------- session
 session:
@@ -108,6 +217,12 @@ execution:
   slippage_bps: 5.0             # paper-fill realism, in basis points
   place_broker_stoploss: true   # server-side SL-M survives a crash — keep this on
   confirm_live: false           # live trading needs this true AND the --live flag
+
+  # 1.0 = cash only. Position sizes are capped at the balance you actually
+  # hold, and no broker margin is used. Raising this borrows from the broker:
+  # at 2x a 2% adverse move becomes a 4% account loss, and Angel's own
+  # auto-square-off — not your stop — starts deciding when you exit.
+  leverage_multiple: 1.0
 
 # ----------------------------------------------------------- notifications
 # Telegram alerts to your phone. This is how you watch a session running on a
