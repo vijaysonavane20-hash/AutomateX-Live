@@ -33,6 +33,37 @@ reported expectancy before believing any number.
 
 ---
 
+## Running alongside an existing portfolio
+
+Safe to do, with two things to know.
+
+**Your delivery holdings are never touched.** Every order the engine places
+carries `producttype: INTRADAY`, and the square-off filters to intraday
+positions only. A CNC/DELIVERY holding is a different product and is never
+sold by this code — there is no path in it that places a delivery order.
+
+**Manual intraday trades are left alone by default.** The square-off closes
+only positions the engine opened. If you also place intraday trades by hand in
+the same account, they survive the cutoff — the engine logs them and leaves
+them to you. Set `execution.square_off_untracked: true` if you want the
+opposite, nuclear behaviour.
+
+Positions the engine opened are recorded in `state/owned_<date>.json`, so a
+crash and restart does not lose track of what is its own to close.
+
+Two more practical points:
+
+- **Free cash, not holdings, is what sizes positions.** In live mode the
+  engine reads your available cash from Angel's RMS and caps against it. If
+  your capital is tied up in holdings, positions will be small — `sized to
+  zero` in the log means exactly that, not a bug. Set `capital:` to the cash
+  you can actually deploy intraday.
+- **Overlap warning.** At start-up the engine compares the day's list against
+  your holdings and warns when they overlap. Add those names to
+  `exclude_symbols` if you would rather it stayed away from them entirely.
+
+---
+
 ## Picking the day's shares automatically
 
 With `screener.enabled: true` the engine chooses what to trade each morning

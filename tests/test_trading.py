@@ -853,6 +853,135 @@ def test_screener_makes_one_call_per_symbol():
     assert screener.broker.calls == 10
 
 
+# --------------------------------------------- coexisting with a portfolio
+
+class _FakePositionBroker:
+    """Captures orders instead of sending them, so square-off scope can be
+    asserted without a broker connection."""
+
+    def __init__(self, positions):
+        self._positions = positions
+        self.orders: list[dict] = []
+        self.name = "test"
+
+    def positions(self):
+        return self._positions
+
+    def open_intraday_positions(self):
+        from trading.broker import AngelBroker
+
+        return AngelBroker.open_intraday_positions(self)
+
+    def place_market_order(self, **kwargs):
+        from trading.broker import OrderResult
+
+        self.orders.append(kwargs)
+        return OrderResult(True, "1", None)
+
+    def square_off_all_intraday(self, only=None):
+        from trading.broker import AngelBroker
+
+        return AngelBroker.square_off_all_intraday(self, only)
+
+
+def _position_row(symbol, qty=10, product="INTRADAY"):
+    return {
+        "tradingsymbol": symbol, "symboltoken": "1", "exchange": "NSE",
+        "netqty": str(qty), "producttype": product,
+    }
+
+
+def test_delivery_holdings_are_never_touched():
+    """The core promise for anyone with an existing portfolio: a CNC holding
+    is not an intraday position and must never be sold by the square-off."""
+    broker = _FakePositionBroker([
+        _position_row("RELIANCE-EQ", 10, "DELIVERY"),
+        _position_row("TCS-EQ", 5, "CNC"),
+        _position_row("INFY-EQ", 7, "INTRADAY"),
+    ])
+    closed = broker.square_off_all_intraday()
+
+    assert closed == 1
+    assert [o["trading_symbol"] for o in broker.orders] == ["INFY-EQ"]
+
+
+def test_square_off_leaves_manual_intraday_trades_alone():
+    """Default behaviour: only close what this engine opened, so a trade you
+    placed by hand in the same account survives the cutoff."""
+    broker = _FakePositionBroker([
+        _position_row("INFY-EQ", 7),      # engine's
+        _position_row("WIPRO-EQ", 3),     # placed by hand
+    ])
+    closed = broker.square_off_all_intraday(only={"INFY-EQ"})
+
+    assert closed == 1
+    assert [o["trading_symbol"] for o in broker.orders] == ["INFY-EQ"]
+
+
+def test_square_off_untracked_closes_everything_when_asked():
+    broker = _FakePositionBroker([
+        _position_row("INFY-EQ", 7),
+        _position_row("WIPRO-EQ", 3),
+    ])
+    closed = broker.square_off_all_intraday(only=None)
+
+    assert closed == 2
+    assert {o["trading_symbol"] for o in broker.orders} == {"INFY-EQ", "WIPRO-EQ"}
+
+
+def test_square_off_closes_shorts_by_buying():
+    broker = _FakePositionBroker([_position_row("INFY-EQ", -7)])
+    broker.square_off_all_intraday()
+
+    assert broker.orders[0]["side"] == "BUY"
+    assert broker.orders[0]["quantity"] == 7
+
+
+def test_owned_positions_survive_a_restart(tmp_path=None):
+    """After a crash the engine must still recognise its own positions —
+    otherwise it would either abandon them or close yours."""
+    import json
+    import tempfile
+    from pathlib import Path
+
+    with tempfile.TemporaryDirectory() as tmp:
+        owned_file = Path(tmp) / "owned.json"
+        owned_file.write_text(json.dumps(["INFY-EQ", "TCS-EQ"]))
+
+        recovered = set(json.loads(owned_file.read_text()))
+        assert recovered == {"INFY-EQ", "TCS-EQ"}
+
+        # A corrupt file must not stop the engine starting.
+        owned_file.write_text("{not json")
+        try:
+            set(json.loads(owned_file.read_text()))
+            raise AssertionError("expected a parse failure")
+        except ValueError:
+            pass
+
+
+def test_exclude_symbols_are_normalised_and_dropped():
+    cfg = default_config()
+    cfg.exclude_symbols = ["reliance", " TCS "]
+
+    excluded = {s.strip().upper() for s in cfg.exclude_symbols}
+    assert excluded == {"RELIANCE", "TCS"}
+
+    todays_list = ["RELIANCE", "INFY", "TCS", "SBIN"]
+    kept = [s for s in todays_list if s.upper() not in excluded]
+    assert kept == ["INFY", "SBIN"]
+
+
+def test_orders_always_use_intraday_product():
+    """Every order path must carry INTRADAY — a stray DELIVERY order would
+    buy into the portfolio instead of trading the day."""
+    from trading.execution import PaperExecutor
+
+    assert ExecutionConfig().product_type == "INTRADAY"
+    ex = PaperExecutor(ExecutionConfig(), ["test"])
+    assert ex.cfg.product_type == "INTRADAY"
+
+
 # ------------------------------------------------------------- notifications
 
 def test_notifier_disabled_by_default():

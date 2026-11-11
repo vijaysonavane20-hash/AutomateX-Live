@@ -35,6 +35,14 @@ symbols:
   - TCS
   - SBIN
 
+# Never trade these, whatever the screener picks. Useful if you already hold
+# shares in delivery in the same account and would rather the engine stayed
+# away from those names entirely. (It never sells holdings regardless — every
+# order is INTRADAY — this just keeps the two from overlapping at all.)
+exclude_symbols: []
+  # - RELIANCE
+  # - TATAMOTORS
+
 # ---------------------------------------------------------------- screener
 # Picks the day's shares automatically each morning instead of trading a fixed
 # list. It screens `universe` on daily candles and keeps the best few.
@@ -223,6 +231,12 @@ execution:
   # at 2x a 2% adverse move becomes a 4% account loss, and Angel's own
   # auto-square-off — not your stop — starts deciding when you exit.
   leverage_multiple: 1.0
+
+  # At the 15:10 cutoff, close only positions this engine opened. Keep false
+  # if you also place intraday trades by hand in the same account — otherwise
+  # the engine's square-off would close those too. Positions it opened are
+  # remembered across a restart, so its own safety net still works.
+  square_off_untracked: false
 
 # ----------------------------------------------------------- notifications
 # Telegram alerts to your phone. This is how you watch a session running on a

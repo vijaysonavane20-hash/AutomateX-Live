@@ -330,18 +330,52 @@ class AngelBroker:
             and str(p.get("producttype", "")).upper() == "INTRADAY"
         ]
 
-    def square_off_all_intraday(self) -> int:
-        """Flatten every open intraday position. Called at the session cutoff
-        and on shutdown — deliberately independent of internal state so it
-        still works if the engine's own bookkeeping has drifted."""
+    def holdings_symbols(self) -> set[str]:
+        """Trading symbols held in delivery (demat).
+
+        Used only to warn when the day's list overlaps your portfolio. The
+        engine never places a DELIVERY/CNC order, so holdings are not at risk
+        from it either way.
+        """
+        try:
+            LIMITS["general"].acquire()
+            resp = self.api.holding() if hasattr(self.api, "holding") else None
+            if isinstance(resp, dict) and resp.get("status"):
+                return {
+                    str(h.get("tradingsymbol", ""))
+                    for h in (resp.get("data") or [])
+                    if h.get("tradingsymbol")
+                }
+        except Exception as exc:
+            log.debug("[%s] Holdings fetch failed: %s", self.name, exc)
+        return set()
+
+    def square_off_all_intraday(self, only_trading_symbols: set[str] | None = None) -> int:
+        """Flatten open intraday positions. Called at the session cutoff and
+        on shutdown — deliberately independent of internal state so it still
+        works if the engine's own bookkeeping has drifted.
+
+        Only ever touches ``producttype == INTRADAY``, so delivery holdings
+        are never sold. `only_trading_symbols`, when given, further limits it
+        to positions the engine itself opened, leaving hand-placed intraday
+        trades in the same account alone.
+        """
         closed = 0
+        skipped: list[str] = []
+
         for pos in self.open_intraday_positions():
             qty = int(float(pos.get("netqty") or 0))
             if qty == 0:
                 continue
+
+            trading_symbol = str(pos.get("tradingsymbol", ""))
+            if only_trading_symbols is not None and trading_symbol not in only_trading_symbols:
+                skipped.append(trading_symbol)
+                continue
+
             result = self.place_market_order(
                 exchange=str(pos.get("exchange", "NSE")),
-                trading_symbol=str(pos["tradingsymbol"]),
+                trading_symbol=trading_symbol,
                 token=str(pos["symboltoken"]),
                 side="SELL" if qty > 0 else "BUY",
                 quantity=abs(qty),
@@ -351,8 +385,15 @@ class AngelBroker:
             else:
                 log.error(
                     "[%s] SQUARE-OFF FAILED for %s x%d: %s — CLOSE THIS MANUALLY.",
-                    self.name, pos.get("tradingsymbol"), abs(qty), result.message,
+                    self.name, trading_symbol, abs(qty), result.message,
                 )
+
+        if skipped:
+            log.warning(
+                "[%s] Left %d intraday position(s) open — this engine did not open them: %s. "
+                "Close them yourself, or your broker will auto-square-off.",
+                self.name, len(skipped), ", ".join(skipped),
+            )
         return closed
 
 

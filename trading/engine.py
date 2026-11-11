@@ -13,6 +13,7 @@ catches a level touched inside the bar) and against the live LTP between bars.
 from __future__ import annotations
 
 import csv
+import json
 import signal
 import time
 from datetime import datetime, timedelta
@@ -51,6 +52,9 @@ class TradingEngine:
             cfg.risk, cfg.total_capital, cfg.execution.leverage_multiple
         )
         self.shortlist: list = []
+        # Trading symbols this engine has opened today. Persisted, so a
+        # restart still knows what is its own to close — and what is yours.
+        self.owned_symbols: set[str] = set()
 
         self.instruments: dict = {}
         self.feed: DataFeed | None = None
@@ -79,11 +83,41 @@ class TradingEngine:
         self.state_dir = Path(cfg.state_dir)
         self.state_dir.mkdir(parents=True, exist_ok=True)
         self.trade_log = self.state_dir / f"trades_{now_ist().date().isoformat()}.csv"
+        self.owned_file = self.state_dir / f"owned_{now_ist().date().isoformat()}.json"
+
+    # ------------------------------------------------------- owned positions
+
+    def _load_owned(self) -> None:
+        """Recover the set of positions this engine opened today.
+
+        Without this, a crash and restart would leave the engine unable to
+        tell its own open positions from ones you placed by hand — and it
+        would either abandon its own or close yours.
+        """
+        if not self.owned_file.exists():
+            return
+        try:
+            self.owned_symbols = set(json.loads(self.owned_file.read_text()))
+            if self.owned_symbols:
+                log.info(
+                    "Recovered %d position(s) opened earlier today: %s",
+                    len(self.owned_symbols), ", ".join(sorted(self.owned_symbols)),
+                )
+        except (OSError, ValueError) as exc:
+            log.warning("Could not read %s (%s) — starting with none.", self.owned_file, exc)
+
+    def _remember_owned(self, trading_symbol: str) -> None:
+        self.owned_symbols.add(trading_symbol)
+        try:
+            self.owned_file.write_text(json.dumps(sorted(self.owned_symbols)))
+        except OSError as exc:
+            log.warning("Could not persist owned positions (%s).", exc)
 
     # ----------------------------------------------------------------- setup
 
     def setup(self) -> None:
         self.notifier = build_notifier(self.cfg)
+        self._load_owned()
 
         log.info("=" * 78)
         log.info("MODE: %s", "LIVE — REAL MONEY" if self.is_live else "PAPER (simulated)")
@@ -125,10 +159,38 @@ class TradingEngine:
                          f"{margin:,.0f}" if margin is not None else "unknown")
                 stale = broker.open_intraday_positions()
                 if stale:
+                    names = ", ".join(str(p.get("tradingsymbol", "?")) for p in stale)
+                    unknown = [
+                        str(p.get("tradingsymbol", "?"))
+                        for p in stale
+                        if str(p.get("tradingsymbol", "")) not in self.owned_symbols
+                    ]
                     log.warning(
-                        "[%s] %d intraday position(s) already open before start. This "
-                        "engine will not manage them — close them manually if unwanted.",
-                        broker.name, len(stale),
+                        "[%s] %d intraday position(s) already open: %s",
+                        broker.name, len(stale), names,
+                    )
+                    if unknown and not self.cfg.execution.square_off_untracked:
+                        log.warning(
+                            "[%s] %s were not opened by this engine. They will be left "
+                            "alone, including at the square-off — close them yourself.",
+                            broker.name, ", ".join(unknown),
+                        )
+                    elif unknown:
+                        log.warning(
+                            "[%s] square_off_untracked is true, so %s WILL be closed at "
+                            "the cutoff even though this engine did not open them.",
+                            broker.name, ", ".join(unknown),
+                        )
+
+                holdings = broker.holdings_symbols()
+                clash = holdings & {i.trading_symbol for i in self.instruments.values()}
+                if clash:
+                    log.warning(
+                        "[%s] Today's list includes %s, which you hold in delivery. "
+                        "Intraday orders are a separate product and will not sell your "
+                        "holdings, but add them to exclude_symbols if you would rather "
+                        "the engine left them out entirely.",
+                        broker.name, ", ".join(sorted(clash)),
                     )
 
         signal.signal(signal.SIGINT, self._handle_signal)
@@ -151,8 +213,11 @@ class TradingEngine:
 
     def _select_symbols(self, master: InstrumentMaster) -> dict:
         """Today's tradeable set: screened each morning, or the fixed list."""
+        excluded = {s.strip().upper() for s in self.cfg.exclude_symbols}
+
         if not self.cfg.screener.enabled:
-            return master.resolve_all(self.cfg.symbols, self.cfg.exchange)
+            wanted = [s for s in self.cfg.symbols if s.upper() not in excluded]
+            return master.resolve_all(wanted, self.cfg.exchange)
 
         screener = Screener(self.pool.data, master, self.cfg.screener, self.cfg.exchange)
         budget = self._position_budget()
@@ -167,8 +232,14 @@ class TradingEngine:
             log.error("Screening failed (%s).", exc)
             if self.cfg.symbols:
                 log.warning("Falling back to the configured 'symbols' list.")
-                return master.resolve_all(self.cfg.symbols, self.cfg.exchange)
+                wanted = [s for s in self.cfg.symbols if s.upper() not in excluded]
+                return master.resolve_all(wanted, self.cfg.exchange)
             raise
+
+        dropped = [r.symbol for r in results if r.symbol.upper() in excluded]
+        if dropped:
+            log.info("Excluded by config (exclude_symbols): %s", ", ".join(dropped))
+        results = [r for r in results if r.symbol.upper() not in excluded]
 
         self.shortlist = results
         self.notifier.send(format_shortlist(results))
@@ -408,6 +479,7 @@ class TradingEngine:
 
         self.open_positions[sig.symbol] = position
         self.risk.record_entry(sig.symbol)
+        self._remember_owned(inst.trading_symbol)
 
         if self.cfg.notifications.notify_entries:
             self.notifier.send(notify.fmt_entry(position, position.total_quantity))
@@ -433,8 +505,11 @@ class TradingEngine:
 
         if self.is_live and self.executor is not None:
             # Belt and braces: flatten anything the broker still shows open,
-            # including legs whose bookkeeping drifted from reality.
-            self.executor.square_off_everything()
+            # including legs whose bookkeeping drifted from reality. By
+            # default this is limited to symbols this engine opened, so
+            # trades you placed by hand in the same account are left alone.
+            only = None if self.cfg.execution.square_off_untracked else self.owned_symbols
+            self.executor.square_off_everything(only)
 
     def _append_trade_log(self, position: Position) -> None:
         exists = self.trade_log.exists()

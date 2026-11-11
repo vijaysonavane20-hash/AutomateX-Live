@@ -33,7 +33,7 @@ class Executor(ABC):
     def update_stop(self, position: Position, new_stop: float) -> None:
         """Move protection to `new_stop`."""
 
-    def square_off_everything(self) -> None:  # pragma: no cover - live only
+    def square_off_everything(self, only_trading_symbols: set[str] | None = None) -> None:  # pragma: no cover - live only
         return None
 
 
@@ -239,9 +239,15 @@ class LiveExecutor(Executor):
         )
         return pnl
 
-    def square_off_everything(self) -> None:
+    def square_off_everything(self, only_trading_symbols: set[str] | None = None) -> None:
+        """Flatten intraday positions still open at the broker.
+
+        `only_trading_symbols` limits this to positions the engine opened.
+        Passing None closes every intraday position in the account, which also
+        catches trades placed by hand — only do that deliberately.
+        """
         for broker in self.pool.connected_brokers:
-            count = broker.square_off_all_intraday()
+            count = broker.square_off_all_intraday(only_trading_symbols)
             if count:
                 log.info("[%s] Squared off %d intraday position(s).", broker.name, count)
 

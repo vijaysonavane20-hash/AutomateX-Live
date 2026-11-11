@@ -123,6 +123,12 @@ class ExecutionConfig:
     # 1.0 = cash only, no broker margin. Anything higher borrows from the
     # broker and magnifies losses by the same factor.
     leverage_multiple: float = 1.0
+    # At the cutoff, close only positions this engine opened. Leave false if
+    # you also trade manually in the same account — otherwise the engine's
+    # square-off would close your hand-placed intraday trades too. Positions
+    # the engine opened are remembered across a restart, so its own safety net
+    # still works.
+    square_off_untracked: bool = False
 
 
 @dataclass
@@ -173,6 +179,10 @@ class AppConfig:
     accounts: list[AccountConfig]
     symbols: list[str]
     exchange: str = "NSE"
+    # Never trade these, whatever the screener says. Use it to protect names
+    # you hold in delivery, so the engine cannot open an intraday position
+    # that collides with your portfolio.
+    exclude_symbols: list[str] = field(default_factory=list)
     holidays: list[str] = field(default_factory=list)
     warmup_days: int = 5
     log_level: str = "INFO"
@@ -260,6 +270,7 @@ def load_config(path: str | Path, load_secrets: bool = True) -> AppConfig:
     cfg = AppConfig(
         accounts=accounts,
         symbols=[str(s).strip().upper() for s in symbols],
+        exclude_symbols=[str(s).strip().upper() for s in (raw.pop("exclude_symbols", None) or [])],
         strategy=strategy,
         risk=risk,
         session=session,
