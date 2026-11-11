@@ -254,6 +254,12 @@ def load_config(path: str | Path, load_secrets: bool = True) -> AppConfig:
 
     symbols = raw.pop("symbols", None) or []
 
+    # A YAML key with every entry commented out parses as None, not []. The
+    # shipped example has exactly that shape for `holidays`, so normalise
+    # every list field here rather than letting None reach the engine.
+    for list_field in ("holidays",):
+        raw[list_field] = list(raw.get(list_field) or [])
+
     strategy = _build(StrategyConfig, raw.pop("strategy", {}) or {})
     risk = _build(RiskConfig, raw.pop("risk", {}) or {})
     session = _build_session(raw.pop("session", {}) or {})

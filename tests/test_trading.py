@@ -853,6 +853,71 @@ def test_screener_makes_one_call_per_symbol():
     assert screener.broker.calls == 10
 
 
+# ----------------------------------------------------- security and safety
+
+def test_secrets_never_appear_in_repr_or_tracebacks():
+    """Credentials must not leak through a logged object or a stack trace."""
+    account = AccountConfig(name="primary", env_prefix="ANGEL_PRIMARY")
+    account.api_key = "SECRET_KEY_123"
+    account.mpin = "9999"
+    account.totp_secret = "SECRETBASE32STRING"
+
+    for rendered in (repr(account), str(account), f"{account}"):
+        for secret in ("SECRET_KEY_123", "SECRETBASE32STRING"):
+            assert secret not in rendered, f"{secret} leaked into {rendered}"
+
+
+def test_holidays_key_with_everything_commented_out_parses_as_empty():
+    """A YAML key whose entries are all commented out parses as None. The
+    shipped example config has that shape, and None used to crash the engine
+    at start-up — after --check had already passed."""
+    import tempfile
+    from pathlib import Path
+
+    import yaml as _yaml
+
+    from trading.config import load_config
+    from trading.utils import MarketCalendar
+
+    raw = {
+        "accounts": [{"name": "a", "env_prefix": "A", "capital": 100000}],
+        "symbols": ["RELIANCE"],
+        "holidays": None,  # what "holidays:" with only comments under it becomes
+    }
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "config.yaml"
+        path.write_text(_yaml.safe_dump(raw))
+        cfg = load_config(path, load_secrets=False)
+
+    assert cfg.holidays == []
+    MarketCalendar(cfg.holidays)  # must not raise
+
+
+def test_live_requires_both_switches():
+    """Eight combinations, exactly one of which trades real money."""
+    from trading.engine import TradingEngine
+
+    cfg = default_config()
+    cfg.holidays = []
+
+    results = {}
+    for mode in ("paper", "live"):
+        for confirm in (False, True):
+            for flag in (False, True):
+                cfg.execution.mode = mode
+                cfg.execution.confirm_live = confirm
+                results[(mode, confirm, flag)] = TradingEngine(cfg, allow_live=flag).is_live
+
+    live = [k for k, v in results.items() if v]
+    assert live == [("live", True, True)], f"unexpected live combinations: {live}"
+
+
+def test_paper_is_the_default_mode():
+    assert ExecutionConfig().mode == "paper"
+    assert ExecutionConfig().confirm_live is False
+    assert ExecutionConfig().place_broker_stoploss is True
+
+
 # --------------------------------------------- coexisting with a portfolio
 
 class _FakePositionBroker:

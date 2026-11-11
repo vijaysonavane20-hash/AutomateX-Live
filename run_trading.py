@@ -84,12 +84,32 @@ def run_check(cfg, log) -> int:
         pool.disconnect_all()
 
 
+def _warn_if_env_readable(env_path: Path) -> None:
+    """Warn when the credentials file is readable by other users.
+
+    Anyone who can read .env can log in and trade the account. On a shared or
+    multi-user server that is the whole game, so it is worth a loud line.
+    """
+    try:
+        mode = env_path.stat().st_mode
+    except OSError:
+        return
+    if mode & 0o077:
+        log = get_logger("main")
+        log.warning(
+            "%s is readable by other users (mode %o). Anyone who can read it can "
+            "trade your account. Fix with: chmod 600 %s",
+            env_path, mode & 0o777, env_path,
+        )
+
+
 def main() -> int:
     args = build_parser().parse_args()
 
     env_path = Path(args.env)
     if env_path.exists():
         load_dotenv(env_path)
+        _warn_if_env_readable(env_path)
 
     log = setup_logging(level="INFO")
     log = get_logger("main")

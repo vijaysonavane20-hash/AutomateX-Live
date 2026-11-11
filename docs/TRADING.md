@@ -33,6 +33,61 @@ reported expectancy before believing any number.
 
 ---
 
+## Security and safety
+
+### Credentials
+
+Secrets live only in `.env`, which is gitignored along with `config.yaml`.
+They are read from the environment at start-up and held on dataclass fields
+marked `repr=False`, so they cannot surface in a log line, an exception
+message or a stack trace — there is a test asserting that. Nothing in the
+codebase logs, prints or transmits them, and `.env` has never been committed.
+
+`run_trading.py` warns at start-up if `.env` is readable by other users.
+Anyone who can read it can trade the account.
+
+Your **TOTP secret is as powerful as your password** — it is the thing that
+generates login codes. Treat it like one: never paste it into a chat, an
+issue, a screenshot or a support ticket.
+
+Angel's own protections sit on top: the API key is bound to the static IPs you
+registered, so a stolen key is not usable from another machine.
+
+Telegram is **send-only**. The engine never reads commands from a chat, so
+someone who obtained the bot token could read your alerts but could not place
+an order.
+
+### Safety
+
+| Layer | What it does |
+|---|---|
+| Paper by default | `mode: live` **and** `confirm_live: true` **and** `--live` are all required. Eight switch combinations, exactly one trades real money |
+| 10-second abort | A countdown before the first live order |
+| Broker-side SL-M | Placed at Angel right after entry — survives a crash, a dead VPS or a dropped connection |
+| Daily loss halt | Stops trading for the day at −2% |
+| Daily profit halt | Stops at +4%, so a good day is not given back |
+| No leverage | Sized against cash held, with a cross-position exposure cap |
+| Square-off | Everything flat at 15:10, ahead of the broker's own auto-square-off |
+| Holdings untouched | Every order is INTRADAY; delivery holdings are never sold |
+| Manual trades untouched | The square-off closes only what the engine opened |
+
+### What is still not protected
+
+Being honest about the gaps:
+
+- **A gap through your stop.** A stock that opens far past the stop fills at
+  the market price, not the stop price. The loss can exceed 1R.
+- **A rejected protective stop.** If the SL-M order is rejected the log says
+  so loudly, but the position is then covered only by the engine's own logic.
+- **Broker or exchange outage.** If Angel is down, nothing can be placed or
+  closed.
+- **A bug in this code.** It is tested, not proven. Paper mode exists for this.
+
+Keep the Angel One app on your phone. It is the authority on your positions;
+this engine is not.
+
+---
+
 ## Running alongside an existing portfolio
 
 Safe to do, with two things to know.
