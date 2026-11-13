@@ -20,3 +20,11 @@ venv/
 
 # OS
 .DS_Store
+
+# Momentum bot (Version 2) — config.json holds the PIN and TOTP secret
+momentum_v2/config.json
+momentum_v2/prep.json
+momentum_v2/state.json
+momentum_v2/news.txt
+momentum_v2/*.csv
+momentum_v2/scrip_master_*.json

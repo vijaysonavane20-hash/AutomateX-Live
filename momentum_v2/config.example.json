@@ -1,0 +1,16 @@
+{
+  "api_key": "SMARTAPI_DASHBOARD_SE_API_KEY",
+  "client_code": "ANGEL_ONE_CLIENT_ID",
+  "pin": "ANGEL_ONE_LOGIN_PIN",
+  "totp_secret": "ENABLE_TOTP_PAGE_KA_SECRET_KEY",
+
+  "mode": "paper",
+  "confirm_live": false,
+
+  "capital": 100000,
+  "risk_pct": 1.0,
+  "min_score": 5,
+
+  "telegram_token": "",
+  "telegram_chat_id": ""
+}
